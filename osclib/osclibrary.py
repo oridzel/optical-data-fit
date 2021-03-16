@@ -7,6 +7,7 @@ r0 = 2.8179403227e-15
 h2ev = 27.21184  # Hartree, converts Hartree to eV
 a0 = 0.529177  # Bohr Radius in Angstroem
 machine_eps = np.finfo('float64').eps
+wpc = 1.8621440006
 
 
 def linspace(start, stop, step=1.):
@@ -90,8 +91,11 @@ class Osc:
         self.Ef = 0.0
         self.eps_b = 1.0
         self.eloss = np.array(eloss)
-        self.vb = 0.0
-        self.na = 0.0
+        self.width_of_the_valence_band = 0.0
+        self.atomic_density = 0.0
+        self.refractive_index = 0.0
+        self.electron_density = 0.0
+        self.Z = 0.0
         if isinstance(q, list):
             self.size_q = len(q)
             self.q = np.array(q)
@@ -109,8 +113,8 @@ class Osc:
         self.q = self.q*a0
         if (self.Eg):
             self.Eg = self.Eg/h2ev
-        if (self.vb):
-            self.vb = self.vb/h2ev
+        if (self.width_of_the_valence_band):
+            self.width_of_the_valence_band = self.width_of_the_valence_band/h2ev
 
     def convert2ru(self):
         if self.model == 'Drude':
@@ -229,7 +233,7 @@ class InelasticProperies:
         if savefig and filename:
             plt.savefig(filename, dpi=600)
 
-    def calculateDIIMFP(self, E0, decdigs=10):
+    def calculateDIIMFP(self, E0, decdigs=10, normalised = True):
         old_eloss = self.osc.eloss
         eloss = linspace(machine_eps, E0, 0.1)
         self.osc.eloss = eloss
@@ -250,9 +254,9 @@ class InelasticProperies:
                 ((-1/self.osc.epsilon[ind]).imag, elf_henke[ind_henke])))
             int_limits = np.log(q_plus/q_minus)
             int_limits[np.isinf(int_limits)] = machine_eps
-            w = 1/(math.pi*(E0/h2ev)) * elf_total * int_limits * (1/h2ev/a0)
+            diimfp = 1/(math.pi*(E0/h2ev)) * elf_total * int_limits * (1/h2ev/a0)
         else:
-            w = np.zeros_like(self.osc.eloss)
+            diimfp = np.zeros_like(self.osc.eloss)
             q_minus = np.log(np.sqrt(2*E0/h2ev) - np.sqrt(2 *
                                                           (E0/h2ev - self.osc.eloss/h2ev)))
             q_plus = np.log(np.sqrt(2*E0/h2ev) + np.sqrt(2 *
@@ -263,19 +267,18 @@ class InelasticProperies:
             self.osc.calculateDielectricFunction()
             self.osc.epsilon[np.isnan(self.osc.epsilon)] = machine_eps
             for i in range(self.osc.eloss.shape[0]):
-                w[i] = 1/(math.pi*(E0/h2ev)) * \
+                diimfp[i] = 1/(math.pi*(E0/h2ev)) * \
                     np.trapz(
                         (-1/self.osc.epsilon[i, :]).imag, q[i, :])*(1/h2ev/a0)
 
-        w[np.isnan(w)] = machine_eps
+        diimfp[np.isnan(diimfp)] = machine_eps
         self.osc.eloss = old_eloss
-
-        return eloss, w
-
-    def plotDIIMFP(self, E0, decdigs = 10, normalised = True, savefig = False, filename = None):
-        eloss, diimfp = self.calculateDIIMFP(E0, decdigs)
         if normalised:
             diimfp = diimfp / np.trapz(diimfp, eloss)
+        return eloss, diimfp
+
+    def plotDIIMFP(self, E0, decdigs = 10, normalised = True, savefig = False, filename = None):
+        eloss, diimfp = self.calculateDIIMFP(E0, decdigs, normalised)
         plt.figure()
         plt.plot(eloss, diimfp)
         plt.xlabel('Energy loss $\omega$ (eV)')
@@ -301,7 +304,7 @@ class InelasticProperies:
                     machine_eps, energy[i] - self.osc.Ef, eloss_step)
             else:
                 interp_eloss = linspace(
-                    machine_eps, energy[i] - (self.osc.Eg + self.osc.vb), eloss_step)
+                    machine_eps, energy[i] - (self.osc.Eg + self.osc.width_of_the_valence_band), eloss_step)
             interp_w = np.interp(interp_eloss, eloss, w)
             interp_w[np.isnan(interp_w)] = machine_eps
 
@@ -337,8 +340,8 @@ class InelasticProperies:
         f1sum /= np.sum(self.osc.composition.indices)
         f2sum /= np.sum(self.osc.composition.indices)
 
-        n = 1 - self.osc.na*r0*1e10*lambd**2*f1sum/2/math.pi
-        k = -self.osc.na*r0*1e10*lambd**2*f2sum/2/math.pi
+        n = 1 - self.osc.atomic_density * r0 * 1e10 * lambd**2 * f1sum/2/math.pi
+        k = -self.osc.atomic_density * r0 * 1e10 * lambd**2 * f2sum/2/math.pi
 
         eps1 = n**2 - k**2
         eps2 = 2*n*k
