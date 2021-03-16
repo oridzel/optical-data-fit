@@ -64,7 +64,7 @@ class Composition:
 
 
 class Osc:
-    def __init__(self, model, name, composition, omega, A, gamma, eloss, q):
+    def __init__(self, model, name, composition, omega, A, gamma, eloss, q, xraypath):
         if not is_list_of_int_float(omega):
             raise InputError(
                 "The array of omega passed must be of the type int or float!")
@@ -80,6 +80,7 @@ class Osc:
                     "The number of oscillator parameters must be the same!")
         self.name = name
         self.composition = composition
+        self.xraypath = xraypath
         self.model = model
         self.omega = np.array(omega)
         self.A = np.array(A)
@@ -222,8 +223,8 @@ class InelasticProperies:
         plt.xlabel('Energy loss $\omega$ (eV)')
         plt.ylabel('ELF')
         plt.title(f'{self.osc.name} {self.osc.model}')
-        plt.xlim(0, 100)
-        plt.legend()
+        # plt.xlim(0, 100)
+        # plt.legend()
         plt.show()
         if savefig and filename:
             plt.savefig(filename, dpi=600)
@@ -233,7 +234,7 @@ class InelasticProperies:
         eloss = linspace(machine_eps, E0, 0.1)
         self.osc.eloss = eloss
 
-        if self.alpha == 0:
+        if self.osc.alpha == 0:
             q_minus = np.sqrt(2 * E0/h2ev) - np.sqrt(2 *
                                                      (E0/h2ev - self.osc.eloss/h2ev))
             q_plus = np.sqrt(2 * E0/h2ev) + np.sqrt(2 *
@@ -257,6 +258,7 @@ class InelasticProperies:
             q_plus = np.log(np.sqrt(2*E0/h2ev) + np.sqrt(2 *
                                                          (E0/h2ev - self.osc.eloss/h2ev)))
             q = np.linspace(q_minus, q_plus, 2 ^ (decdigs - 1), axis=1)
+            self.osc.size_q = q.shape[1] 
             self.osc.q = np.exp(q)/a0
             self.osc.calculateDielectricFunction()
             self.osc.epsilon[np.isnan(self.osc.epsilon)] = machine_eps
@@ -270,7 +272,26 @@ class InelasticProperies:
 
         return eloss, w
 
-    def calculateIMFP(self, energy, isMetal=False):
+    def plotDIIMFP(self, E0, decdigs = 10, normalised = True, savefig = False, filename = None):
+        eloss, diimfp = self.calculateDIIMFP(E0, decdigs)
+        if normalised:
+            diimfp = diimfp / np.trapz(diimfp, eloss)
+        plt.figure()
+        plt.plot(eloss, diimfp)
+        plt.xlabel('Energy loss $\omega$ (eV)')
+        if normalised:
+            plt.ylabel('Normalised DIIMFP (eV$^{-1}$)')
+        else:
+            plt.ylabel('DIIMFP')
+        plt.title(f'{self.osc.name} {self.osc.model}')
+        # plt.legend()
+        # plt.xlim(0,100)
+        plt.show()
+        if savefig and filename:
+            plt.savefig(filename, dpi=600)
+
+
+    def calculateIMFP(self, energy, isMetal=True):
         lambda_in = np.zeros_like(energy)
         for i in range(energy.shape[0]):
             eloss, w = self.calculateDIIMFP(energy[i], 12)
@@ -281,12 +302,24 @@ class InelasticProperies:
             else:
                 interp_eloss = linspace(
                     machine_eps, energy[i] - (self.osc.Eg + self.osc.vb), eloss_step)
-            interp_wd = np.interp(interp_eloss, eloss, w)
+            interp_w = np.interp(interp_eloss, eloss, w)
             interp_w[np.isnan(interp_w)] = machine_eps
 
             lambda_in[i] = 1/np.trapz(interp_w, interp_eloss)
 
         return lambda_in
+
+    def plotIMFP(self, energy, isMetal=True, savefig = False, filename = None):
+        imfp = self.calculateIMFP(energy)
+        plt.figure()
+        plt.plot(energy, imfp)
+        plt.xlabel('Energy (eV)')
+        plt.ylabel('IMFP ($\mathrm{\AA}$)')
+        plt.yscale('log')
+        plt.xscale('log')
+        plt.title(f'{self.osc.name} {self.osc.model}')
+        # plt.legend()
+        plt.show()
 
     def mopt(self):
 
