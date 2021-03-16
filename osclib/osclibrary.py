@@ -1,11 +1,13 @@
 from typing import List, Tuple
 import numpy as np
 import math
+import matplotlib.pyplot as plt
 
 hc = 12.3981756608  # planck constant times velocity of light keV Angstr
 r0 = 2.8179403227e-15
 h2ev = 27.21184  # Hartree, converts Hartree to eV
 a0 = 0.529177  # Bohr Radius in Angstroem
+machine_eps = np.finfo('float64').eps
 
 
 def linspace(start, stop, step=1.):
@@ -125,8 +127,8 @@ class Osc:
 class Drude(Osc):
     model = 'Drude'
 
-    def __init__(self, omega, A, gamma, eloss=linspace(0, 100, 1), q=0.0, name=None, composition=None):
-        super().__init__(self.model, name, composition, omega, A, gamma, eloss, q)
+    def __init__(self, omega, A, gamma, eloss=linspace(0, 100, 1), q=0.0, name=None, composition=None, xraypath=None):
+        super().__init__(self.model, name, composition, omega, A, gamma, eloss, q, xraypath)
 
     def calculateDielectricFunction(self):
         self.convert2au()
@@ -163,8 +165,8 @@ class Drude(Osc):
 class DrudeLindhard(Osc):
     model = 'DrudeLindhard'
 
-    def __init__(self, omega, A, gamma, eloss=linspace(0, 100, 1), q=0.0, name=None, composition=None):
-        super().__init__(self.model, name, composition, omega, A, gamma, eloss, q)
+    def __init__(self, omega, A, gamma, eloss=linspace(0, 100, 1), q=0.0, name=None, composition=None, xraypath=None):
+        super().__init__(self.model, name, composition, omega, A, gamma, eloss, q, xraypath)
 
     def calculateDielectricFunction(self):
         self.convert2au()
@@ -202,62 +204,129 @@ class DrudeLindhard(Osc):
         return oneover_eps
 
 
-class InelasticProperties:
-    osc: Osc
+class InelasticProperies:
 
-    def diimfp(osc, E0, decdigs):
-        old_eloss = osc.eloss
+    def __init__(self, osc):
+        if isinstance(osc, Osc):
+            self.osc = osc
+
+    def calculateELF(self):
+        self.osc.calculateDielectricFunction()
+        ELF = (-1/self.osc.epsilon).imag
+        ELF[np.isnan(ELF)] = machine_eps
+        return ELF
+
+    def plotELF(self, savefig=False, filename=None):
+        plt.figure()
+        ELF = self.calculateELF()
+        plt.plot(self.osc.eloss, ELF, label='ELF')
+        plt.xlabel('Energy loss $\omega$ (eV)')
+        plt.ylabel('ELF')
+        plt.title(f'{self.osc.name} {self.osc.model}')
+        plt.xlim(0, 100)
+        plt.legend()
+        plt.show()
+        if savefig and filename:
+            plt.savefig(filename, dpi=600)
+
+    def calculateDIIMFP(self, E0, decdigs=10):
+        old_eloss = self.osc.eloss
         eloss = linspace(machine_eps, E0, 0.1)
-        osc.eloss = eloss
+        self.osc.eloss = eloss
 
-        if osc.alpha == 0:
-            q_minus = np.sqrt(2*E0/h2ev) - np.sqrt(2*(E0/h2ev-osc.eloss/h2ev))
-            q_plus = np.sqrt(2*E0/h2ev) + np.sqrt(2*(E0/h2ev-osc.eloss/h2ev))
-            eps = eps_sum(osc)
-            eps[np.isnan(eps)] = machine_eps
-            energy_henke, elf_henke = mopt(osc.composition, osc.na)
+        if self.alpha == 0:
+            q_minus = np.sqrt(2 * E0/h2ev) - np.sqrt(2 *
+                                                     (E0/h2ev - self.osc.eloss/h2ev))
+            q_plus = np.sqrt(2 * E0/h2ev) + np.sqrt(2 *
+                                                    (E0/h2ev - self.osc.eloss/h2ev))
+            self.osc.calculateDielectricFunction()
+            self.osc.epsilon[np.isnan(self.osc.epsilon)] = machine_eps
+            energy_henke, elf_henke = self.mopt()
             ind_henke = energy_henke > 100
-            ind = osc.eloss <= 100
+            ind = self.osc.eloss <= 100
             eloss_total = np.concatenate(
-                (osc.eloss[ind], energy_henke[ind_henke]))
-            elf_total = np.interp(osc.eloss, eloss_total, np.concatenate(
-                ((-1/eps[ind]).imag, elf_henke[ind_henke])))
+                (self.osc.eloss[ind], energy_henke[ind_henke]))
+            elf_total = np.interp(self.osc.eloss, eloss_total, np.concatenate(
+                ((-1/self.osc.epsilon[ind]).imag, elf_henke[ind_henke])))
             int_limits = np.log(q_plus/q_minus)
             int_limits[np.isinf(int_limits)] = machine_eps
             w = 1/(math.pi*(E0/h2ev)) * elf_total * int_limits * (1/h2ev/a0)
         else:
-            w = np.zeros_like(osc.eloss)
-            q_minus = np.log(np.sqrt(2*E0/h2ev) -
-                             np.sqrt(2*(E0/h2ev-osc.eloss/h2ev)))
-            q_plus = np.log(np.sqrt(2*E0/h2ev) +
-                            np.sqrt(2*(E0/h2ev-osc.eloss/h2ev)))
-            q = np.linspace(q_minus, q_plus, 2 ^ (decdigs-1), axis=1)
-            osc.q = np.exp(q)/a0
-            eps = eps_sum(osc)
-            eps[np.isnan(eps)] = machine_eps
-            for i in range(osc.eloss.shape[0]):
+            w = np.zeros_like(self.osc.eloss)
+            q_minus = np.log(np.sqrt(2*E0/h2ev) - np.sqrt(2 *
+                                                          (E0/h2ev - self.osc.eloss/h2ev)))
+            q_plus = np.log(np.sqrt(2*E0/h2ev) + np.sqrt(2 *
+                                                         (E0/h2ev - self.osc.eloss/h2ev)))
+            q = np.linspace(q_minus, q_plus, 2 ^ (decdigs - 1), axis=1)
+            self.osc.q = np.exp(q)/a0
+            self.osc.calculateDielectricFunction()
+            self.osc.epsilon[np.isnan(self.osc.epsilon)] = machine_eps
+            for i in range(self.osc.eloss.shape[0]):
                 w[i] = 1/(math.pi*(E0/h2ev)) * \
-                    np.trapz((-1/eps[i, :]).imag, q[i, :])*(1/h2ev/a0)
+                    np.trapz(
+                        (-1/self.osc.epsilon[i, :]).imag, q[i, :])*(1/h2ev/a0)
 
         w[np.isnan(w)] = machine_eps
-        osc.eloss = old_eloss
+        self.osc.eloss = old_eloss
 
         return eloss, w
 
-    def imfp(osc, energy, isMetal=False):
+    def calculateIMFP(self, energy, isMetal=False):
         lambda_in = np.zeros_like(energy)
         for i in range(energy.shape[0]):
-            eloss, w = diimfp(osc, energy[i], 12)
+            eloss, w = self.calculateDIIMFP(energy[i], 12)
             eloss_step = 0.5
             if isMetal:
                 interp_eloss = linspace(
-                    machine_eps, energy[i] - osc.Ef, eloss_step)
+                    machine_eps, energy[i] - self.osc.Ef, eloss_step)
             else:
                 interp_eloss = linspace(
-                    machine_eps, energy[i] - (osc.Eg + osc.vb), eloss_step)
-            interp_w = np.interp(interp_eloss, eloss, w)
+                    machine_eps, energy[i] - (self.osc.Eg + self.osc.vb), eloss_step)
+            interp_wd = np.interp(interp_eloss, eloss, w)
             interp_w[np.isnan(interp_w)] = machine_eps
 
             lambda_in[i] = 1/np.trapz(interp_w, interp_eloss)
 
         return lambda_in
+
+    def mopt(self):
+
+        numberOfElements = len(self.osc.composition.elements)
+        f1sum = 0
+        f2sum = 0
+
+        for i in range(numberOfElements):
+            dataHenke = self.readhenke(
+                self.osc.xraypath + self.osc.composition.elements[i])
+            f1sum += dataHenke[:, 1] * self.osc.composition.indices[i]
+            f2sum += dataHenke[:, 2] * self.osc.composition.indices[i]
+
+        lambd = hc/(dataHenke[:, 0]/1000)
+        f1sum /= np.sum(self.osc.composition.indices)
+        f2sum /= np.sum(self.osc.composition.indices)
+
+        n = 1 - self.osc.na*r0*1e10*lambd**2*f1sum/2/math.pi
+        k = -self.osc.na*r0*1e10*lambd**2*f2sum/2/math.pi
+
+        eps1 = n**2 - k**2
+        eps2 = 2*n*k
+        return dataHenke[:, 0], -eps2/(eps1**2 + eps2**2)
+
+    def readhenke(self, filename):
+        i = 0
+        f = open(filename + '.', 'rt')
+        for line in f:
+            if line.startswith('#'):
+                continue
+            i += 1
+        f.close()
+        henke = np.zeros((i, 3))
+        i = 0
+        f = open(filename + '.', 'rt')
+        for line in f:
+            if line.startswith('#'):
+                continue
+            henke[i, :] = line.split()
+            i += 1
+        f.close()
+        return henke
