@@ -48,6 +48,53 @@ class InputError(Error):
     def __init__(self, message):
         self.message = message
 
+class Henke:
+    def __init__(self, osc):
+        if isinstance(osc, Osc):
+            self.osc = osc
+
+    def mopt(self):
+
+        numberOfElements = len(self.osc.composition.elements)
+        f1sum = 0
+        f2sum = 0
+
+        for i in range(numberOfElements):
+            dataHenke = self.readhenke(
+                self.osc.xraypath + self.osc.composition.elements[i])
+            f1sum += dataHenke[:, 1] * self.osc.composition.indices[i]
+            f2sum += dataHenke[:, 2] * self.osc.composition.indices[i]
+
+        lambd = hc/(dataHenke[:, 0]/1000)
+        f1sum /= np.sum(self.osc.composition.indices)
+        f2sum /= np.sum(self.osc.composition.indices)
+
+        n = 1 - self.osc.atomic_density * r0 * 1e10 * lambd**2 * f1sum/2/math.pi
+        k = -self.osc.atomic_density * r0 * 1e10 * lambd**2 * f2sum/2/math.pi
+
+        eps1 = n**2 - k**2
+        eps2 = 2*n*k
+        return dataHenke[:, 0], -eps2/(eps1**2 + eps2**2)
+
+    def readhenke(self, filename):
+        i = 0
+        f = open(filename + '.', 'rt')
+        for line in f:
+            if line.startswith('#'):
+                continue
+            i += 1
+        f.close()
+        henke = np.zeros((i, 3))
+        i = 0
+        f = open(filename + '.', 'rt')
+        for line in f:
+            if line.startswith('#'):
+                continue
+            henke[i, :] = line.split()
+            i += 1
+        f.close()
+        return henke
+
 
 class Composition:
     def __init__(self, elements, indices):
@@ -127,6 +174,67 @@ class Osc:
         self.q = self.q/a0
         if (self.Eg):
             self.Eg = self.Eg*h2ev
+
+    def evaluateFsum(self, eloss, elf):
+        eloss_total, elf_total = self.extendToHenke(eloss, elf)
+        fsum = 1 / (2 * math.pi**2 * (self.atomic_density * a0**3)) * np.trapz(eloss_total/h2ev * elf_total, eloss_total/h2ev)
+        return fsum
+
+    def evaluateKKsum(self, eloss, elf):
+        eloss_total, elf_total = self.extendToHenke(eloss, elf)
+        div = elf_total/eloss_total
+        div[np.isnan(div)] = machine_eps
+        kksum = 2 / math.pi * np.trapz(div, eloss_total) + 1/self.refractive_index**2
+        return kksum
+
+    def extendToHenke(self, eloss, elf):
+        energy_henke, elf_henke = self.mopt()
+        ind_henke = energy_henke > 100
+        ind = eloss <= 100
+        eloss_total = np.concatenate((eloss[ind], energy_henke[ind_henke]))
+        elf_total = np.concatenate((elf[ind], elf_henke[ind_henke]))
+        return eloss_total, elf_total
+    
+    def mopt(self):
+        numberOfElements = len(self.composition.elements)
+        f1sum = 0
+        f2sum = 0
+
+        for i in range(numberOfElements):
+            dataHenke = self.readhenke(
+                self.xraypath + self.composition.elements[i])
+            f1sum += dataHenke[:, 1] * self.composition.indices[i]
+            f2sum += dataHenke[:, 2] * self.composition.indices[i]
+
+        lambd = hc/(dataHenke[:, 0]/1000)
+        f1sum /= np.sum(self.composition.indices)
+        f2sum /= np.sum(self.composition.indices)
+
+        n = 1 - self.atomic_density * r0 * 1e10 * lambd**2 * f1sum/2/math.pi
+        k = -self.atomic_density * r0 * 1e10 * lambd**2 * f2sum/2/math.pi
+
+        eps1 = n**2 - k**2
+        eps2 = 2*n*k
+        return dataHenke[:, 0], -eps2/(eps1**2 + eps2**2)
+
+    def readhenke(self, filename):
+        i = 0
+        f = open(filename + '.', 'rt')
+        for line in f:
+            if line.startswith('#'):
+                continue
+            i += 1
+        f.close()
+        henke = np.zeros((i, 3))
+        i = 0
+        f = open(filename + '.', 'rt')
+        for line in f:
+            if line.startswith('#'):
+                continue
+            henke[i, :] = line.split()
+            i += 1
+        f.close()
+        return henke
 
 
 class Drude(Osc):
@@ -254,7 +362,7 @@ class InelasticProperies:
                                                     (E0/h2ev - self.osc.eloss/h2ev))
             self.osc.calculateDielectricFunction()
             self.osc.epsilon[np.isnan(self.osc.epsilon)] = machine_eps
-            energy_henke, elf_henke = self.mopt()
+            energy_henke, elf_henke = self.osc.mopt()
             ind_henke = energy_henke > 100
             ind = self.osc.eloss <= 100
             eloss_total = np.concatenate(
@@ -334,45 +442,3 @@ class InelasticProperies:
         plt.title(f'{self.osc.name} {self.osc.model}')
         # plt.legend()
         plt.show()
-
-    def mopt(self):
-
-        numberOfElements = len(self.osc.composition.elements)
-        f1sum = 0
-        f2sum = 0
-
-        for i in range(numberOfElements):
-            dataHenke = self.readhenke(
-                self.osc.xraypath + self.osc.composition.elements[i])
-            f1sum += dataHenke[:, 1] * self.osc.composition.indices[i]
-            f2sum += dataHenke[:, 2] * self.osc.composition.indices[i]
-
-        lambd = hc/(dataHenke[:, 0]/1000)
-        f1sum /= np.sum(self.osc.composition.indices)
-        f2sum /= np.sum(self.osc.composition.indices)
-
-        n = 1 - self.osc.atomic_density * r0 * 1e10 * lambd**2 * f1sum/2/math.pi
-        k = -self.osc.atomic_density * r0 * 1e10 * lambd**2 * f2sum/2/math.pi
-
-        eps1 = n**2 - k**2
-        eps2 = 2*n*k
-        return dataHenke[:, 0], -eps2/(eps1**2 + eps2**2)
-
-    def readhenke(self, filename):
-        i = 0
-        f = open(filename + '.', 'rt')
-        for line in f:
-            if line.startswith('#'):
-                continue
-            i += 1
-        f.close()
-        henke = np.zeros((i, 3))
-        i = 0
-        f = open(filename + '.', 'rt')
-        for line in f:
-            if line.startswith('#'):
-                continue
-            henke[i, :] = line.split()
-            i += 1
-        f.close()
-        return henke
