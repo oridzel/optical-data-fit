@@ -96,6 +96,7 @@ class Osc:
         self.refractive_index = 0.0
         self.electron_density = 0.0
         self.Z = 0.0
+        self.q_dependency = None
         if isinstance(q, list):
             self.size_q = len(q)
             self.q = np.array(q)
@@ -153,7 +154,10 @@ class Drude(Osc):
         self.epsilon = epsilon
 
     def calculateOneOscillator(self, omega0, gamma, alpha):
-        w_at_q = omega0 + 0.5 * alpha * self.q**2
+        if self.q_dependency:
+            w_at_q = omega0 - self.q_dependency(0)/h2ev + self.q_dependency(self.q / a0)/h2ev
+        else:
+            w_at_q = omega0 + 0.5 * alpha * self.q**2
 
         omega = np.squeeze(np.array([self.eloss, ] * self.size_q).transpose())
 
@@ -192,7 +196,10 @@ class DrudeLindhard(Osc):
         self.epsilon = epsilon
 
     def calculateOneOscillator(self, omega0, gamma, alpha):
-        w_at_q = omega0 + 0.5 * alpha * self.q**2
+        if self.q_dependency:
+            w_at_q = omega0 - self.q_dependency(0)/h2ev + self.q_dependency(self.q / a0)/h2ev
+        else:
+            w_at_q = omega0 + 0.5 * alpha * self.q**2
 
         omega = np.squeeze(np.array([self.eloss, ] * self.size_q).transpose())
 
@@ -235,6 +242,8 @@ class InelasticProperies:
 
     def calculateDIIMFP(self, E0, decdigs=10, normalised = True):
         old_eloss = self.osc.eloss
+        old_q = self.osc.q
+        old_size_q = self.osc.size_q
         eloss = linspace(machine_eps, E0, 0.1)
         self.osc.eloss = eloss
 
@@ -273,6 +282,8 @@ class InelasticProperies:
 
         diimfp[np.isnan(diimfp)] = machine_eps
         self.osc.eloss = old_eloss
+        self.osc.q = old_q
+        self.osc.size_q = old_size_q
         if normalised:
             diimfp = diimfp / np.trapz(diimfp, eloss)
         return eloss, diimfp
@@ -297,7 +308,7 @@ class InelasticProperies:
     def calculateIMFP(self, energy, isMetal=True):
         lambda_in = np.zeros_like(energy)
         for i in range(energy.shape[0]):
-            eloss, w = self.calculateDIIMFP(energy[i], 12)
+            eloss, w = self.calculateDIIMFP(energy[i], 12, normalised=False)
             eloss_step = 0.5
             if isMetal:
                 interp_eloss = linspace(
