@@ -1,6 +1,7 @@
 import numpy as np
 import math
 import matplotlib.pyplot as plt
+from typing import List
 
 hc = 12.3981756608  # planck constant times velocity of light keV Angstr
 r0 = 2.8179403227e-15
@@ -48,53 +49,6 @@ class InputError(Error):
     def __init__(self, message):
         self.message = message
 
-class Henke:
-    def __init__(self, osc):
-        if isinstance(osc, Osc):
-            self.osc = osc
-
-    def mopt(self):
-
-        numberOfElements = len(self.osc.composition.elements)
-        f1sum = 0
-        f2sum = 0
-
-        for i in range(numberOfElements):
-            dataHenke = self.readhenke(
-                self.osc.xraypath + self.osc.composition.elements[i])
-            f1sum += dataHenke[:, 1] * self.osc.composition.indices[i]
-            f2sum += dataHenke[:, 2] * self.osc.composition.indices[i]
-
-        lambd = hc/(dataHenke[:, 0]/1000)
-        f1sum /= np.sum(self.osc.composition.indices)
-        f2sum /= np.sum(self.osc.composition.indices)
-
-        n = 1 - self.osc.atomic_density * r0 * 1e10 * lambd**2 * f1sum/2/math.pi
-        k = -self.osc.atomic_density * r0 * 1e10 * lambd**2 * f2sum/2/math.pi
-
-        eps1 = n**2 - k**2
-        eps2 = 2*n*k
-        return dataHenke[:, 0], -eps2/(eps1**2 + eps2**2)
-
-    def readhenke(self, filename):
-        i = 0
-        f = open(filename + '.', 'rt')
-        for line in f:
-            if line.startswith('#'):
-                continue
-            i += 1
-        f.close()
-        henke = np.zeros((i, 3))
-        i = 0
-        f = open(filename + '.', 'rt')
-        for line in f:
-            if line.startswith('#'):
-                continue
-            henke[i, :] = line.split()
-            i += 1
-        f.close()
-        return henke
-
 
 class Composition:
     def __init__(self, elements, indices):
@@ -111,8 +65,8 @@ class Composition:
         self.indices = indices
 
 
-class Osc:
-    def __init__(self, model, name, composition, omega, A, gamma, eloss, q, xraypath):
+class Oscillators:
+    def __init__(self, model, A, gamma, omega, alpha = 1.0, eps_b = 1.0):
         if not is_list_of_int_float(omega):
             raise InputError(
                 "The array of omega passed must be of the type int or float!")
@@ -126,21 +80,30 @@ class Osc:
             if len(omega) != len(A) != len(gamma):
                 raise InputError(
                     "The number of oscillator parameters must be the same!")
-        self.name = name
+        self.model = model;
+        self.A = A;
+        self.gamma = gamma;
+        self.omega = omega;
+        self.alpha = alpha;
+        self.eps_b = eps_b;
+
+
+class Material:
+    '''Here will be some description of the class Material'''
+
+    def __init__(self, name, oscillators, composition, eloss, q, xraypath):
+        if not isinstance(oscillators, Oscillators):
+            raise InputError("The oscillators must be of the type Oscillators")
+        if not isinstance(composition, Composition):
+            raise InputError("The composition must be of the type Composition")
+        self.oscillators = oscillators;
         self.composition = composition
-        self.xraypath = xraypath
-        self.model = model
-        self.omega = np.array(omega)
-        self.A = np.array(A)
-        self.gamma = np.array(gamma)
-        self.alpha = 0.0
         self.Eg = 0.0
         self.Ef = 0.0
-        self.eps_b = 1.0
         self.eloss = np.array(eloss)
         self.width_of_the_valence_band = 0.0
         self.atomic_density = 0.0
-        self.refractive_index = 0.0
+        self.static_refractive_index = 0.0
         self.electron_density = 0.0
         self.Z = 0.0
         self.q_dependency = None
@@ -151,11 +114,91 @@ class Osc:
             self.size_q = 1
             self.q = q
 
-    def convert2au(self):
+    def calculateDielectricFunction(self):
         if self.model == 'Drude':
-            self.A = self.A/h2ev/h2ev
-        self.gamma = self.gamma/h2ev
-        self.omega = self.omega/h2ev
+            self.epsilon = calculateDrudeDielectricFunction();
+        elif self.model == 'DrudeLindhard':
+            self.epsilon = calculateDLDielectricFunction();
+        else
+            raise InputError("Invalid model name. The valid model names are: Drude, DrudeLindhard")
+
+    def calculateDrudeDielectricFunction(self):
+        self.convert2au()
+        eps_real = self.oscillators.eps_b * \
+            np.squeeze(np.ones((self.eloss.shape[0], self.size_q)))
+        eps_imag = np.squeeze(np.zeros((self.eloss.shape[0], self.size_q)))
+        epsilon = np.zeros_like(eps_real, dtype=complex)
+
+        for i in range(len(self.A)):
+            epsDrude_real, epsDrude_imag = self.calculateDrudeOscillator(
+                self.oscillators.omega[i], self.oscillators.gamma[i], self.oscillators.alpha)
+            eps_real -= self.oscillators.A[i] * epsDrude_real
+            eps_imag += self.oscillators.A[i] * epsDrude_imag
+
+        epsilon.real = eps_real
+        epsilon.imag = eps_imag
+        self.convert2ru()
+        return epsilon
+
+    def calculateDrudeOscillator(self, omega0, gamma, alpha):
+        if self.q_dependency:
+            w_at_q = omega0 - self.q_dependency(0)/h2ev + self.q_dependency(self.q / a0)/h2ev
+        else:
+            w_at_q = omega0 + 0.5 * alpha * self.q**2
+
+        omega = np.squeeze(np.array([self.eloss, ] * self.size_q).transpose())
+
+        mm = omega**2 - w_at_q**2
+        divisor = mm**2 + omega**2 * gamma**2
+
+        eps_real = mm / divisor
+        eps_imag = omega*gamma / divisor
+
+        return eps_real, eps_imag
+
+    def calculateDLDielectricFunction(self):
+        self.convert2au()
+        epsilon = np.squeeze(
+            np.zeros((self.eloss.shape[0], self.size_q), dtype=complex))
+        sum_oneover_eps = np.squeeze(
+            np.zeros((self.eloss.shape[0], self.size_q), dtype=complex))
+        oneover_eps = np.squeeze(
+            np.zeros((self.eloss.shape[0], self.size_q), dtype=complex))
+
+        for i in range(len(self.oscillators.A)):
+            oneover_eps = self.calculateDLOscillator(
+                self.oscillators.omega[i], self.oscillators.gamma[i], self.oscillators.alpha)
+            sum_oneover_eps += self.oscillators.A[i] * (oneover_eps - complex(1))
+
+        sum_oneover_eps += complex(1)
+        epsilon = complex(1) / sum_oneover_eps
+        self.convert2ru()
+        return epsilon
+
+    def calculateDLOscillator(self, omega0, gamma, alpha):
+        if self.q_dependency:
+            w_at_q = omega0 - self.q_dependency(0)/h2ev + self.q_dependency(self.q / a0)/h2ev
+        else:
+            w_at_q = omega0 + 0.5 * alpha * self.q**2
+
+        omega = np.squeeze(np.array([self.eloss, ] * self.size_q).transpose())
+
+        mm = omega**2 - w_at_q**2
+        divisor = mm**2 + omega**2 * gamma**2
+
+        oneover_eps_real = 1.0 + omega0**2 * mm / divisor
+        oneover_eps_imag = -omega0**2 * omega * gamma / divisor
+
+        oneover_eps = np.squeeze(np.apply_along_axis(lambda args: [complex(
+            *args)], 0, np.array([oneover_eps_real, oneover_eps_imag])))
+
+        return oneover_eps
+
+    def convert2au(self):
+        if self.oscillators.model == 'Drude':
+            self.oscillators.A = self.oscillators.A/h2ev/h2ev
+        self.oscillators.gamma = self.oscillators.gamma/h2ev
+        self.oscillators.omega = self.oscillators.omega/h2ev
         self.Ef = self.Ef/h2ev
         self.eloss = self.eloss/h2ev
         self.q = self.q*a0
@@ -165,35 +208,38 @@ class Osc:
             self.width_of_the_valence_band = self.width_of_the_valence_band/h2ev
 
     def convert2ru(self):
-        if self.model == 'Drude':
-            self.A = self.A*h2ev*h2ev
-        self.gamma = self.gamma*h2ev
-        self.omega = self.omega*h2ev
+        if self.oscillators.model == 'Drude':
+            self.oscillators.A = self.oscillators.A*h2ev*h2ev
+        self.oscillators.gamma = self.oscillators.gamma*h2ev
+        self.oscillators.omega = self.oscillators.omega*h2ev
         self.Ef = self.Ef*h2ev
         self.eloss = self.eloss*h2ev
         self.q = self.q/a0
         if (self.Eg):
             self.Eg = self.Eg*h2ev
 
-    def evaluateFsum(self, eloss, elf):
-        eloss_total, elf_total = self.extendToHenke(eloss, elf)
-        fsum = 1 / (2 * math.pi**2 * (self.atomic_density * a0**3)) * np.trapz(eloss_total/h2ev * elf_total, eloss_total/h2ev)
+    def evaluateFsum(self):
+        if not self.ELF_extended_to_Henke:
+            self.extendToHenke()
+        fsum = 1 / (2 * math.pi**2 * (self.atomic_density * a0**3)) * np.trapz(self.eloss_extended_to_Henke/h2ev * self.ELF_extended_to_Henke, self.eloss_extended_to_Henke/h2ev)
         return fsum
 
-    def evaluateKKsum(self, eloss, elf):
-        eloss_total, elf_total = self.extendToHenke(eloss, elf)
-        div = elf_total/eloss_total
+    def evaluateKKsum(self):
+        if not self.ELF_extended_to_Henke:
+            self.extendToHenke()
+        div = self.ELF_extended_to_Henke / self.eloss_extended_to_Henke
         div[np.isnan(div)] = machine_eps
-        kksum = 2 / math.pi * np.trapz(div, eloss_total) + 1/self.refractive_index**2
+        kksum = 2 / math.pi * np.trapz(div, self.eloss_extended_to_Henke) + 1/self.refractive_index**2
         return kksum
 
-    def extendToHenke(self, eloss, elf):
+    def extendToHenke(self):
+        if not self.ELF or self.ELF.shape[0] != self.eloss.shape[0]:
+            self.calculateELF()
         energy_henke, elf_henke = self.mopt()
         ind_henke = energy_henke > 100
-        ind = eloss <= 100
-        eloss_total = np.concatenate((eloss[ind], energy_henke[ind_henke]))
-        elf_total = np.concatenate((elf[ind], elf_henke[ind_henke]))
-        return eloss_total, elf_total
+        ind = self.eloss <= 100
+        self.eloss_extended_to_Henke = np.concatenate((self.eloss[ind], energy_henke[ind_henke]))
+        self.ELF_extended_to_Henke = np.concatenate((self.ELF[ind], elf_henke[ind_henke]))
     
     def mopt(self):
         numberOfElements = len(self.composition.elements)
@@ -236,176 +282,78 @@ class Osc:
         f.close()
         return henke
 
-
-class Drude(Osc):
-    model = 'Drude'
-
-    def __init__(self, omega, A, gamma, eloss=linspace(0, 100, 1), q=0.0, name=None, composition=None, xraypath=None):
-        super().__init__(self.model, name, composition, omega, A, gamma, eloss, q, xraypath)
-
-    def calculateDielectricFunction(self):
-        self.convert2au()
-        eps_real = self.eps_b * \
-            np.squeeze(np.ones((self.eloss.shape[0], self.size_q)))
-        eps_imag = np.squeeze(np.zeros((self.eloss.shape[0], self.size_q)))
-        epsilon = np.zeros_like(eps_real, dtype=complex)
-
-        for i in range(len(self.A)):
-            epsDrude_real, epsDrude_imag = self.calculateOneOscillator(
-                self.omega[i], self.gamma[i], self.alpha)
-            eps_real -= self.A[i]*epsDrude_real
-            eps_imag += self.A[i]*epsDrude_imag
-
-        epsilon.real = eps_real
-        epsilon.imag = eps_imag
-        self.convert2ru()
-        self.epsilon = epsilon
-
-    def calculateOneOscillator(self, omega0, gamma, alpha):
-        if self.q_dependency:
-            w_at_q = omega0 - self.q_dependency(0)/h2ev + self.q_dependency(self.q / a0)/h2ev
-        else:
-            w_at_q = omega0 + 0.5 * alpha * self.q**2
-
-        omega = np.squeeze(np.array([self.eloss, ] * self.size_q).transpose())
-
-        mm = omega**2 - w_at_q**2
-        divisor = mm**2 + omega**2 * gamma**2
-
-        eps_real = mm / divisor
-        eps_imag = omega*gamma / divisor
-
-        return eps_real, eps_imag
-
-
-class DrudeLindhard(Osc):
-    model = 'DrudeLindhard'
-
-    def __init__(self, omega, A, gamma, eloss=linspace(0, 100, 1), q=0.0, name=None, composition=None, xraypath=None):
-        super().__init__(self.model, name, composition, omega, A, gamma, eloss, q, xraypath)
-
-    def calculateDielectricFunction(self):
-        self.convert2au()
-        epsilon = np.squeeze(
-            np.zeros((self.eloss.shape[0], self.size_q), dtype=complex))
-        sum_oneover_eps = np.squeeze(
-            np.zeros((self.eloss.shape[0], self.size_q), dtype=complex))
-        oneover_eps = np.squeeze(
-            np.zeros((self.eloss.shape[0], self.size_q), dtype=complex))
-
-        for i in range(len(self.A)):
-            oneover_eps = self.calculateOneOscillator(
-                self.omega[i], self.gamma[i], self.alpha)
-            sum_oneover_eps += self.A[i] * (oneover_eps - complex(1))
-
-        sum_oneover_eps += complex(1)
-        epsilon = complex(1) / sum_oneover_eps
-        self.convert2ru()
-        self.epsilon = epsilon
-
-    def calculateOneOscillator(self, omega0, gamma, alpha):
-        if self.q_dependency:
-            w_at_q = omega0 - self.q_dependency(0)/h2ev + self.q_dependency(self.q / a0)/h2ev
-        else:
-            w_at_q = omega0 + 0.5 * alpha * self.q**2
-
-        omega = np.squeeze(np.array([self.eloss, ] * self.size_q).transpose())
-
-        mm = omega**2 - w_at_q**2
-        divisor = mm**2 + omega**2 * gamma**2
-
-        oneover_eps_real = 1.0 + omega0**2 * mm / divisor
-        oneover_eps_imag = -omega0**2 * omega * gamma / divisor
-
-        oneover_eps = np.squeeze(np.apply_along_axis(lambda args: [complex(
-            *args)], 0, np.array([oneover_eps_real, oneover_eps_imag])))
-
-        return oneover_eps
-
-
-class InelasticProperies:
-
-    def __init__(self, osc):
-        if isinstance(osc, Osc):
-            self.osc = osc
-
     def calculateELF(self):
-        self.osc.calculateDielectricFunction()
+        if not self.epsilon or self.epsilon.shape[0] != self.eloss.shape[0]:
+            self.calculateDielectricFunction()
         ELF = (-1/self.osc.epsilon).imag
         ELF[np.isnan(ELF)] = machine_eps
-        return ELF
+        self.ELF = ELF
 
-    def plotELF(self, savefig=False, filename=None):
+    def plotELF(self, savefig = False, filename = None):
+        if not self.ELF or self.ELF.shape[0] != self.eloss.shape[0]:
+            self.calculateELF()
         plt.figure()
-        ELF = self.calculateELF()
-        plt.plot(self.osc.eloss, ELF, label='ELF')
+        plt.plot(self.eloss, self.ELF, label='ELF')
         plt.xlabel('Energy loss $\omega$ (eV)')
         plt.ylabel('ELF')
-        plt.title(f'{self.osc.name} {self.osc.model}')
+        plt.title(f'{self.name} {self.oscillators.model}')
         # plt.xlim(0, 100)
         # plt.legend()
         plt.show()
         if savefig and filename:
             plt.savefig(filename, dpi=600)
 
-    def calculateDIIMFP(self, E0, decdigs=10, normalised = True):
-        old_eloss = self.osc.eloss
-        old_q = self.osc.q
-        old_size_q = self.osc.size_q
+    def calculateDIIMFP(self, E0, decdigs = 10, normalised = True):
+        old_eloss = self.eloss
+        old_q = self.q
+        old_size_q = self.size_q
         eloss = linspace(machine_eps, E0, 0.1)
-        self.osc.eloss = eloss
+        self.eloss = eloss
 
-        if self.osc.alpha == 0:
+        if self.oscillators.alpha == 0:
             q_minus = np.sqrt(2 * E0/h2ev) - np.sqrt(2 *
-                                                     (E0/h2ev - self.osc.eloss/h2ev))
+                                                     (E0/h2ev - self.eloss/h2ev))
             q_plus = np.sqrt(2 * E0/h2ev) + np.sqrt(2 *
-                                                    (E0/h2ev - self.osc.eloss/h2ev))
-            self.osc.calculateDielectricFunction()
-            self.osc.epsilon[np.isnan(self.osc.epsilon)] = machine_eps
-            energy_henke, elf_henke = self.osc.mopt()
-            ind_henke = energy_henke > 100
-            ind = self.osc.eloss <= 100
-            eloss_total = np.concatenate(
-                (self.osc.eloss[ind], energy_henke[ind_henke]))
-            elf_total = np.interp(self.osc.eloss, eloss_total, np.concatenate(
-                ((-1/self.osc.epsilon[ind]).imag, elf_henke[ind_henke])))
+                                                    (E0/h2ev - self.eloss/h2ev))
+            self.extendToHenke()
             int_limits = np.log(q_plus/q_minus)
             int_limits[np.isinf(int_limits)] = machine_eps
             diimfp = 1/(math.pi*(E0/h2ev)) * elf_total * int_limits * (1/h2ev/a0)
         else:
-            diimfp = np.zeros_like(self.osc.eloss)
+            diimfp = np.zeros_like(self.eloss)
             q_minus = np.log(np.sqrt(2*E0/h2ev) - np.sqrt(2 *
-                                                          (E0/h2ev - self.osc.eloss/h2ev)))
+                                                          (E0/h2ev - self.eloss/h2ev)))
             q_plus = np.log(np.sqrt(2*E0/h2ev) + np.sqrt(2 *
-                                                         (E0/h2ev - self.osc.eloss/h2ev)))
+                                                         (E0/h2ev - self.eloss/h2ev)))
             q = np.linspace(q_minus, q_plus, 2 ^ (decdigs - 1), axis=1)
-            self.osc.size_q = q.shape[1] 
-            self.osc.q = np.exp(q)/a0
-            self.osc.calculateDielectricFunction()
-            self.osc.epsilon[np.isnan(self.osc.epsilon)] = machine_eps
-            for i in range(self.osc.eloss.shape[0]):
+            self.size_q = q.shape[1] 
+            self.q = np.exp(q)/a0
+            self.calculateDielectricFunction()
+            for i in range(self.eloss.shape[0]):
                 diimfp[i] = 1/(math.pi*(E0/h2ev)) * \
                     np.trapz(
                         (-1/self.osc.epsilon[i, :]).imag, q[i, :])*(1/h2ev/a0)
 
         diimfp[np.isnan(diimfp)] = machine_eps
-        self.osc.eloss = old_eloss
-        self.osc.q = old_q
-        self.osc.size_q = old_size_q
+        self.eloss = old_eloss
+        self.q = old_q
+        self.size_q = old_size_q
         if normalised:
             diimfp = diimfp / np.trapz(diimfp, eloss)
-        return eloss, diimfp
+        self.DIIMFP = diimfp
+        self.DIIMFP_E = eloss
 
     def plotDIIMFP(self, E0, decdigs = 10, normalised = True, savefig = False, filename = None):
-        eloss, diimfp = self.calculateDIIMFP(E0, decdigs, normalised)
+        if not self.DIIMFP:
+            self.calculateDIIMFP(E0, decdigs, normalised)
         plt.figure()
-        plt.plot(eloss, diimfp)
+        plt.plot(self.DIIMFP_E, self.DIIMFP)
         plt.xlabel('Energy loss $\omega$ (eV)')
         if normalised:
             plt.ylabel('Normalised DIIMFP (eV$^{-1}$)')
         else:
             plt.ylabel('DIIMFP')
-        plt.title(f'{self.osc.name} {self.osc.model}')
+        plt.title(f'{self.name} {self.oscillators.model}')
         # plt.legend()
         # plt.xlim(0,100)
         plt.show()
@@ -413,32 +361,37 @@ class InelasticProperies:
             plt.savefig(filename, dpi=600)
 
 
-    def calculateIMFP(self, energy, isMetal=True):
-        lambda_in = np.zeros_like(energy)
+    def calculateIMFP(self, energy, isMetal = True):
+        if isMetal and self.Ef == 0:
+            raise InputError("Please specify the value of the Fermi energy Ef")
+        elif not isMetal and self.Eg == 0 and self.width_of_the_valence_band == 0:
+            raise InputError("Please specify the values of the band gap Eg and the width of the valence band width_of_the_valence_band")
+        imfp = np.zeros_like(energy)
         for i in range(energy.shape[0]):
-            eloss, w = self.calculateDIIMFP(energy[i], 12, normalised=False)
-            eloss_step = 0.5
+            self.calculateDIIMFP(energy[i], 12, normalised = False)
+            eloss_step = 0.1
             if isMetal:
                 interp_eloss = linspace(
-                    machine_eps, energy[i] - self.osc.Ef, eloss_step)
+                    machine_eps, energy[i] - self.Ef, eloss_step)
             else:
                 interp_eloss = linspace(
-                    machine_eps, energy[i] - (self.osc.Eg + self.osc.width_of_the_valence_band), eloss_step)
+                    machine_eps, energy[i] - (self.Eg + self.width_of_the_valence_band), eloss_step)
             interp_w = np.interp(interp_eloss, eloss, w)
             interp_w[np.isnan(interp_w)] = machine_eps
 
-            lambda_in[i] = 1/np.trapz(interp_w, interp_eloss)
+            imfp[i] = 1/np.trapz(interp_w, interp_eloss)
+        self.IMFP = imfp
+        self.IMFP_E = energy
 
-        return lambda_in
-
-    def plotIMFP(self, energy, isMetal=True, savefig = False, filename = None):
-        imfp = self.calculateIMFP(energy)
+    def plotIMFP(self, energy, isMetal = True, savefig = False, filename = None):
+        if not self.IMFP or self.IMFP_E != energy:
+            self.calculateIMFP(energy, isMetal)
         plt.figure()
-        plt.plot(energy, imfp)
+        plt.plot(self.IMFP_E, self.IMFP)
         plt.xlabel('Energy (eV)')
         plt.ylabel('IMFP ($\mathrm{\AA}$)')
         plt.yscale('log')
         plt.xscale('log')
-        plt.title(f'{self.osc.name} {self.osc.model}')
+        plt.title(f'{self.name} {self.oscillators.model}')
         # plt.legend()
         plt.show()
