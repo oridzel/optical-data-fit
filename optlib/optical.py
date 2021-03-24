@@ -111,6 +111,7 @@ class Material:
         self.electron_density = None
         self.Z = None
         self.ELF = None
+        self.surfaceELF = None
         self.epsilon = None
         self.DIIMFP = None
         self.DIIMFP_E = None
