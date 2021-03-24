@@ -130,11 +130,13 @@ class Material:
 
     def calculateDielectricFunction(self):
         if self.oscillators.model == 'Drude':
-            self.epsilon = self.calculateDrudeDielectricFunction();
+            self.epsilon = self.calculateDrudeDielectricFunction()
         elif self.oscillators.model == 'DrudeLindhard':
-            self.epsilon = self.calculateDLDielectricFunction();
+            self.epsilon = self.calculateDLDielectricFunction()
+        elif self.oscillators.model == 'Mermin':
+            self.epsilon = self.calculateMerminDielectricFunction()
         else:
-            raise InputError("Invalid model name. The valid model names are: Drude, DrudeLindhard")
+            raise InputError("Invalid model name. The valid model names are: Drude, DrudeLindhard and Mermin")
 
     def calculateDrudeDielectricFunction(self):
         self.convert2au()
@@ -207,6 +209,88 @@ class Material:
             *args)], 0, np.array([oneover_eps_real, oneover_eps_imag])))
 
         return oneover_eps
+
+    def calculateLinhardOscillator(self, omega, gamma, omega0):
+        n_dens = omega0**2 / (4*math.pi)
+        E_f = 0.5 * (3 * math.pi**2 * n_dens)**(2.0 / 3.0)
+        v_f = (2*E_f)**0.5
+        
+        z = self.q / (2 * v_f);  
+        chi = np.sqrt(1.0 / (math.pi * v_f))
+        
+        z1_1 = omega / (self.q * v_f)
+        z1_1[np.isnan(z1_1)] = machine_eps
+        
+        gq = np.zeros_like(self.q)
+        gq = gamma / (self.q * v_f)
+        vos_g_array = np.vectorize(self.vos_g)
+        reD1, imD1 = vos_g_array(z1_1 + z, gq)
+        reD2, imD2 = vos_g_array(z1_1 - z, gq)
+        
+        red1_d2 = reD1 - reD2
+        imd1_d2 = imD1 - imD2
+        
+        chizzz = chi**2 / (z**3 * 4)
+        epsreal = 1 + red1_d2 * chizzz
+        epsimag = imd1_d2 * chizzz
+        complex_array = np.vectorize(complex)
+        return complex_array(epsreal, epsimag)
+
+    def vos_g(self, z, img_z):
+        zplus1 = z + 1
+        zminus1 = z - 1
+        
+        if img_z != 0:
+            imgZ2 = img_z**2
+            dummy1 = math.log( np.sqrt((zplus1 * zplus1 + imgZ2) / (zminus1 * zminus1 + imgZ2)) )
+            dummy2 = math.atan2(img_z, zplus1) - math.atan2(img_z, zminus1)
+
+            reim1 = 1 - (z**2 - imgZ2)
+
+            outreal_1 = z + 0.5 * reim1 * dummy1
+            outreal = outreal_1 + z *img_z * dummy2
+
+            outimag_1 = img_z + 0.5 * reim1 * dummy2
+            outimag = outimag_1 - z * img_z * dummy1
+        else:
+            dummy1 = math.log( abs(zplus1) / abs(zminus1) )
+            dummy2 = math.atan2(0, zplus1) - math.atan2(0, zminus1)
+
+            reim1 = 1 - z**2
+
+            outreal_1 = z + 0.5 * reim1 * dummy1
+            outreal = outreal_1
+
+            outimag_1 = 0.5 * reim1 * dummy2
+            outimag = outimag_1
+        return outreal, outimag
+
+    def calculateMerminOscillator(self, omega0, gamma):
+        omega = np.squeeze(np.array([self.eloss, ] * self.size_q).transpose())
+        gammma_over_omega = gamma / omega
+        complex_array = np.vectorize(complex)
+        z1 = complex_array(1, gammma_over_omega)
+        z2 = self.calculateLinhardOscillator(omega, gamma, omega0) - 1
+        z3 = self.calculateLinhardOscillator(np.zeros_like(omega), 0, omega0) - 1
+        top = z1 * z2
+        bottom = complex_array(0, gammma_over_omega) * z2 / z3 + 1
+        return 1 + top / bottom
+
+    def calculateMerminDielectricFunction(self):
+        self.convert2au()
+        epsilon = np.squeeze(
+            np.zeros((self.eloss.shape[0], self.size_q), dtype=complex))
+        eps1 = np.squeeze(
+            np.zeros((self.eloss.shape[0], self.size_q), dtype=complex))
+
+        for i in range(len(self.oscillators.A)):
+            epsMerm = self.calculateMerminOscillator(
+                self.oscillators.omega[i], self.oscillators.gamma[i])
+            eps1 += self.oscillators.A[i] * (complex(1) / epsMerm)
+
+        epsilon = complex(1) / eps1
+        self.convert2ru()
+        return epsilon
 
     def convert2au(self):
         if self.oscillators.model == 'Drude':
