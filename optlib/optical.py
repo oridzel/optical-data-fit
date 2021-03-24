@@ -2,6 +2,8 @@ import numpy as np
 import math
 import matplotlib.pyplot as plt
 from typing import List
+import nlopt
+import copy
 
 hc = 12.3981756608  # planck constant times velocity of light keV Angstr
 r0 = 2.8179403227e-15
@@ -300,6 +302,23 @@ class Material:
         ELF[np.isnan(ELF)] = machine_eps
         self.ELF = ELF
 
+    def calculateSurfaceELF(self):
+        if self.epsilon is None or self.epsilon.shape[0] != self.eloss.shape[0]:
+            self.calculateDielectricFunction()
+        eps_1 = self.epsilon.real
+        eps_2 = self.epsilon.imag
+        den = (eps_1**2 + eps_1 - eps_2**2)**2 + (2*eps_1*eps_2 + eps_2)**2
+        enu = -eps_2*(2*eps_1 + 1)*((eps_1 - 1)**2 - eps_2**2)
+        enu += 2*eps_2*(eps_1 - 1)*(eps_1*(eps_1 + 1) - eps_2**2)
+        self.surfaceELF = enu/den
+
+    def calculateOpticalConstants(self):
+        if self.epsilon is None or self.epsilon.shape[0] != self.eloss.shape[0]:
+            self.calculateDielectricFunction()
+        n_complex = np.sqrt(self.epsilon)
+        self.refractive_index = n_complex.real
+        self.extinction_coefficient = n_complex.imag
+
     def plotELF(self, savefig = False, filename = None):
         if self.ELF is None or self.ELF.shape[0] != self.eloss.shape[0]:
             self.calculateELF()
@@ -409,3 +428,77 @@ class Material:
         plt.title(f'{self.name} {self.oscillators.model}')
         # plt.legend()
         plt.show()
+
+class OptFit:
+    
+    def __init__(self, material, x_exp, y_exp, E0):
+        if not isinstance(material, Material):
+            raise InputError("The material must be of the type Material")
+        if E0 == 0:
+            raise InputError("E0 must be non-zero")
+        self.material = material
+        self.x_exp = x_exp
+        self.y_exp = y_exp
+        self.E0 = E0
+        
+    def setBounds(self):
+        osc_min_A = np.ones_like(self.material.oscillators.A) * 1e-10
+        osc_min_gamma = np.ones_like(self.material.oscillators.gamma) * 0.25
+        osc_min_omega = np.ones_like(self.material.oscillators.omega) * self.material.Eg
+
+        if self.material.oscillators.model == 'Drude':
+            osc_max_A = np.ones_like(self.material.oscillators.A) * 1e3
+        else:
+            osc_max_A = np.ones_like(self.material.oscillators.A)
+
+        osc_max_gamma = np.ones_like(self.material.oscillators.gamma) * 100
+        osc_max_omega = np.ones_like(self.material.oscillators.omega) * self.x_exp[-1]
+
+        self.lb = np.hstack((osc_min_A,osc_min_gamma,osc_min_omega))
+        self.ub = np.hstack((osc_max_A,osc_max_gamma,osc_max_omega))
+    
+    def runOptimisation(self, maxeval = 1000, xtol_rel = 1e-6):
+        opt = nlopt.opt(nlopt.LN_COBYLA, len(self.struct2Vec(self.material)))
+        opt.set_min_objective(self.objective_function)
+        self.setBounds()
+        opt.set_lower_bounds(self.lb)
+        opt.set_upper_bounds(self.ub)
+        opt.add_inequality_constraint(self.constraint_function)
+        opt.set_maxeval(maxeval)
+        opt.set_xtol_rel(xtol_rel)
+        return opt.optimize(self.struct2Vec(self.material))
+    
+    def struct2Vec(self, osc_struct):
+        return np.hstack((osc_struct.oscillators.A,osc_struct.oscillators.gamma,osc_struct.oscillators.omega))
+    
+    def vec2Struct(self, osc_vec):
+        oscillators = np.split(osc_vec,3)
+        material = copy.deepcopy(self.material)
+        material.oscillators.A = oscillators[0]
+        material.oscillators.gamma = oscillators[1]
+        material.oscillators.omega = oscillators[2]
+        return material
+    
+    def objective_function(self, osc_vec, grad):
+        material = self.vec2Struct(osc_vec)
+        material.calculateDIIMFP(self.E0, 11)
+        diimfp_interp = np.interp(self.x_exp, material.DIIMFP_E, material.DIIMFP)
+        chi_squared = np.sum((self.y_exp - diimfp_interp)**2)
+
+        if grad.size > 0:
+            grad = np.array([0,0.5/chi_squared])
+        return chi_squared
+    
+    def constraint_function(self, osc_vec, grad):
+        material = self.vec2Struct(osc_vec)
+        material.convert2au()
+        if material.oscillators.model == 'Drude':
+            cf = material.electron_density * wpc / np.sum(material.oscillators.A)
+        else:
+            cf = (1 - 1/material.refractive_index**2) / np.sum(material.oscillators.A)
+        val = np.fabs(cf-1)
+
+        if grad.size > 0:
+            grad = np.array([0,0.5/val])
+
+        return val
