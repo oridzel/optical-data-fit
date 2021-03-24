@@ -277,6 +277,8 @@ class Material:
         return 1 + top / bottom
 
     def calculateMerminDielectricFunction(self):
+        if self.size_q == 1 and self.q == 0:
+            self.q = 0.01
         self.convert2au()
         epsilon = np.squeeze(
             np.zeros((self.eloss.shape[0], self.size_q), dtype=complex))
