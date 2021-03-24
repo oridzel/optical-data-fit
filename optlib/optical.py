@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from typing import List
 import nlopt
 import copy
+import pandas as pd
 
 hc = 12.3981756608  # planck constant times velocity of light keV Angstr
 r0 = 2.8179403227e-15
@@ -111,6 +112,7 @@ class Material:
         self.electron_density = None
         self.Z = None
         self.ELF = None
+        self.ELF_extended_to_Henke = None
         self.surfaceELF = None
         self.epsilon = None
         self.DIIMFP = None
@@ -429,6 +431,14 @@ class Material:
         plt.title(f'{self.name} {self.oscillators.model}')
         # plt.legend()
         plt.show()
+
+    def writeOpticalData(self):
+        self.calculateELF()
+        self.calculateOpticalConstants()
+        d = dict(E=np.round(self.eloss,2),n=np.round(self.refractive_index,2),k=np.round(self.extinction_coefficient,2),eps1=np.round(self.epsilon.real,2), eps2=np.round(self.epsilon.imag,2), elf=np.round(self.ELF,2))
+        df = pd.DataFrame.from_dict(d, orient='index').transpose().fillna('')
+        with open(f'{self.name}_{self.oscillators.model}_table_optical_data.csv', 'w') as tf:
+            tf.write(df.to_csv(index=False))
 
 class OptFit:
     
