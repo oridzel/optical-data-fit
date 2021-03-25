@@ -339,10 +339,12 @@ class Material:
         omega_minus = complex_array(np.sqrt(r) * np.cos(theta / 2.0), np.sqrt(r) * np.sin(theta / 2.0))
         epsilon = np.zeros_like(omega_minus)
         ind_ge = omega_minus.real >= 0
-        epsilon[ind_ge] = self.calculateLinhardOscillator(omega_minus[ind_ge].real, omega_minus[ind_ge].imag, omega0)
-        
         ind_lt = omega_minus.real < 0
-        if any(ind_lt):
+        ge = any(ind_ge.flatten())
+        lt = any(ind_lt.flatten())
+        if ge:
+            epsilon[ind_ge] = self.calculateLinhardOscillator(omega_minus.real, omega_minus.imag, omega0)[ind_ge]      
+        if lt:
             n_dens = omega0**2 / (4.0 * math.pi)
             E_f = 0.5 * (3.0 * math.pi**2 * n_dens)**(2.0 / 3.0)
             v_f = (2 * E_f)**0.5
@@ -379,7 +381,7 @@ class Material:
             t5 = 1 / QQ**2 - t1
             eps_real = 1 + 2 / (math.pi * v_f) * (t5 + t2 + t3 - t4)
             
-            epsilon[ind_lt] = complex_array(eps_real[ind_lt], eps_imag[ind_lt])
+            epsilon[ind_lt] = complex_array(eps_real, eps_imag)[ind_lt]
         return epsilon
 
     def c_arctan(self, z):
@@ -535,7 +537,7 @@ class Material:
         self.eloss = eloss
         diimfp = np.zeros_like(self.eloss)
 
-        if self.oscillators.alpha == 0:
+        if self.oscillators.alpha == 0 and self.oscillators.model != 'Mermin' and self.oscillators.model != 'MerminLL':
             q_minus = np.sqrt(2 * E0/h2ev) - np.sqrt(2 *
                                                      (E0/h2ev - self.eloss/h2ev))
             q_plus = np.sqrt(2 * E0/h2ev) + np.sqrt(2 *
