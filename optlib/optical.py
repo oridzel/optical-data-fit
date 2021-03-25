@@ -219,15 +219,18 @@ class Material:
         self.convert2au()
         epsilon = np.squeeze(
             np.zeros((self.eloss.shape[0], self.size_q), dtype=complex))
-        eps1 = np.squeeze(
+        oneovereps = np.squeeze(
             np.zeros((self.eloss.shape[0], self.size_q), dtype=complex))
 
         for i in range(len(self.oscillators.A)):
-            epsMerm = self.calculateMerminOscillator(
+            if all(np.abs((self.eloss - self.oscillators.omega[i]) / self.oscillators.gamma[i]) < 100000):
+                epsMermin = self.calculateMerminOscillator(
                 self.oscillators.omega[i], self.oscillators.gamma[i])
-            eps1 += self.oscillators.A[i] * (complex(1) / epsMerm)
-
-        epsilon = complex(1) / eps1
+            else:
+                epsMermin = complex(1)
+            oneovereps += self.oscillators.A[i] * (complex(1) / epsMermin)
+        oneovereps += complex(1) - complex(np.sum(self.oscillators.A))
+        epsilon = complex(1) / oneovereps
         self.convert2ru()
         return epsilon
 
@@ -291,11 +294,11 @@ class Material:
         gammma_over_omega = gamma / omega
         complex_array = np.vectorize(complex)
         z1 = complex_array(1, gammma_over_omega)
-        z2 = self.calculateLinhardOscillator(omega, gamma, omega0) - 1
-        z3 = self.calculateLinhardOscillator(np.zeros_like(omega), 0, omega0) - 1
+        z2 = self.calculateLinhardOscillator(omega, gamma, omega0) - complex(1)
+        z3 = self.calculateLinhardOscillator(np.zeros_like(omega), 0, omega0) - complex(1)
         top = z1 * z2
-        bottom = complex_array(0, gammma_over_omega) * z2 / z3 + 1
-        return 1 + top / bottom
+        bottom = complex(1) + complex_array(0, gammma_over_omega) * z2 / z3
+        return complex(1) + top / bottom
 
     def calculateMerminLLDielectricFunction(self):
         if self.U == 0:
@@ -305,15 +308,15 @@ class Material:
         self.convert2au()
         epsilon = np.squeeze(
             np.zeros((self.eloss.shape[0], self.size_q), dtype=complex))
-        eps1 = np.squeeze(
+        oneovereps = np.squeeze(
             np.zeros((self.eloss.shape[0], self.size_q), dtype=complex))
 
         for i in range(len(self.oscillators.A)):
-            epsMerm = self.calculateMerminLLOscillator(
+            epsMLL = self.calculateMerminLLOscillator(
                 self.oscillators.omega[i], self.oscillators.gamma[i])
-            eps1 += self.oscillators.A[i] * (complex(1) / epsMerm)
-
-        epsilon = complex(1) / eps1
+            oneovereps += self.oscillators.A[i] * (complex(1) / epsMLL - complex(1))
+        oneovereps += complex(1)
+        epsilon = complex(1) / oneovereps
         self.convert2ru()
         return epsilon
 
@@ -322,33 +325,32 @@ class Material:
         gammma_over_omega = gamma / omega
         complex_array = np.vectorize(complex)
         z1 = complex_array(1, gammma_over_omega)
-        z2 = self.eps_LLX(omega, gamma, omega0) - 1
-        z3 = self.eps_LLX(np.zeros_like(omega), 0, omega0) - 1
+        z2 = self.eps_LLX(omega, gamma, omega0) - complex(1)
+        z3 = self.eps_LLX(np.zeros_like(omega), 0, omega0) - complex(1)
         top = z1 * z2
-        bottom = complex_array(0, gammma_over_omega) * z2 / z3 + 1
-        return 1 + top / bottom
+        bottom = complex(1) + complex_array(0, gammma_over_omega) * z2 / z3
+        return complex(1) + top / bottom
 
     def eps_LLX(self, omega, gamma, omega0):
-        ogdif = self.U**2 + gamma**2
         complex_array = np.vectorize(complex)
-        omega_minus_square = complex_array(omega**2 - ogdif, 2 * omega * gamma)
-        r = abs(omega_minus_square)
-        atan2 = np.vectorize(math.atan2)
-        cos = np.vectorize(math.cos)
-        sin = np.vectorize(math.sin)
-        theta = atan2(omega_minus_square.imag, omega_minus_square.real)
-        omega_minus = complex_array(np.sqrt(r) * cos(theta / 2.0), np.sqrt(r) * sin(theta / 2.0))
-        if all(omega_minus.real) >= 0:
-            epsilon = self.calculateLinhardOscillator(omega_minus.real, omega_minus.imag, omega0)
-        else:
+        omega_minus_square = complex_array(omega**2 - self.U**2 - gamma**2, 2.0 * omega * gamma)
+        r = np.abs(omega_minus_square)
+        theta = np.arctan2(omega_minus_square.imag, omega_minus_square.real)
+        omega_minus = complex_array(np.sqrt(r) * np.cos(theta / 2.0), np.sqrt(r) * np.sin(theta / 2.0))
+        epsilon = np.zeros_like(omega_minus)
+        ind_ge = omega_minus.real >= 0
+        epsilon[ind_ge] = self.calculateLinhardOscillator(omega_minus[ind_ge].real, omega_minus[ind_ge].imag, omega0)
+        
+        ind_lt = omega_minus.real < 0
+        if any(ind_lt):
             n_dens = omega0**2 / (4.0 * math.pi)
             E_f = 0.5 * (3.0 * math.pi**2 * n_dens)**(2.0 / 3.0)
             v_f = (2 * E_f)**0.5
-            DeltaSquare = - omega_minus_square / E_f**2
+            DeltaSquare = -omega_minus_square / E_f**2
             r = abs(DeltaSquare)
-            theta = math.atan2(DeltaSquare.imag, DeltaSquare.real)
-            Delta = complex_array(np.sqrt(r) * math.cos(theta / 2.0), np.sqrt(r) * math.sin(theta / 2.0))
-            QQ = q / v_f
+            theta = atan2(DeltaSquare.imag, DeltaSquare.real)
+            Delta = complex_array(np.sqrt(r) * np.cos(theta / 2.0), np.sqrt(r) * np.sin(theta / 2.0))
+            QQ = self.q / v_f
             z1 = 2.0 * QQ + QQ**2
             res1 = z1 / Delta
             res1 = self.c_arctan(res1)
@@ -358,17 +360,17 @@ class Material:
             res1 = res1 + res2
             res2 = res1 * Delta
             
-            z1 = DeltaSquare.real + complex_array(2 * QQ + QQ**2)**2, DeltaSquare.imag
-            z2 = DeltaSquare.real + complex_array(2 * QQ - QQ**2)**2, DeltaSquare.imag
+            z1 = complex_array( DeltaSquare.real + (2 * QQ + QQ**2)**2 , DeltaSquare.imag)
+            z2 = complex_array( DeltaSquare.real + (2 * QQ - QQ**2)**2 , DeltaSquare.imag)
             z1 = z1 / z2
-            z1 = math.log(z1)
+            z1 = np.log(z1)
             z2 = DeltaSquare * z1
             
             p1 = res2.imag / (2 * QQ**3)
             p2 = z2.imag / (8 * QQ**5)
             p3 = z1.imag / (2 * QQ**3)
             p4 = z1.imag / (8 * QQ)    
-            eps_imag = 2.0 / (math.pi * v_f) * (-p1 + p2 + p3 - p4)
+            eps_imag = 2 / (math.pi * v_f) * (-p1 + p2 + p3 - p4)
             
             t1 = res2.real / (2 * QQ**3)
             t2 = z2.real / (8 * QQ**5)
@@ -377,46 +379,49 @@ class Material:
             t5 = 1 / QQ**2 - t1
             eps_real = 1 + 2 / (math.pi * v_f) * (t5 + t2 + t3 - t4)
             
-            epsilon = complex_array(eps_real, eps_imag)
+            epsilon[ind_lt] = complex_array(eps_real[ind_lt], eps_imag[ind_lt])
         return epsilon
 
     def c_arctan(self, z):
         complex_array = np.vectorize(complex)
+        reres = np.zeros_like(z)
         x = z.real
         y = z.imag
-        imres = (-1.0 / 4.0 * math.log((1 - x**2 - y**2)**2 + 4.0 * x**2) \
-             + 1 / 2 * math.log((1 + y)**2 + x**2)).imag
-        if all(x) >= 0:
-            reres = (math.pi/4.0 - 0.5 * math.atan((1 - x**2 - y**2) / (2.0 * x))).real
-        elif all(x) < 0:
-            reres = (math.pi/4.0 - 0.5 * math.atan((1 - x**2 - y**2) / (2.0 * x))).real
-        else:
-            reres = math.pi / 2.0
-        return complex_array(reres, imres)
+        imres = -1.0 / 4.0 * np.log( (1 - x**2 - y**2)**2 + 4 * x**2) \
+                + 1.0 / 2.0 * np.log( (1 + y)**2 + x**2 )
+        reres[x != 0] = math.pi / 4.0 - 0.5 * np.arctan( (1 - x**2 - y**2) / (2.0 * x) )
+        reres[np.logical_and(x > 0, x < 0)] = math.pi / 2.0
+        return complex_array(reres.real, imres.imag)
 
     def convert2au(self):
         if self.oscillators.model == 'Drude':
             self.oscillators.A = self.oscillators.A/h2ev/h2ev
-        self.oscillators.gamma = self.oscillators.gamma/h2ev
-        self.oscillators.omega = self.oscillators.omega/h2ev
-        self.Ef = self.Ef/h2ev
-        self.eloss = self.eloss/h2ev
-        self.q = self.q*a0
+        self.oscillators.gamma /= h2ev
+        self.oscillators.omega /= h2ev
+        self.Ef /= h2ev
+        self.eloss /= h2ev
+        self.q *= a0
         if (self.Eg):
-            self.Eg = self.Eg/h2ev
+            self.Eg /= h2ev
+        if (self.U):
+            self.U /= h2ev
         if (self.width_of_the_valence_band):
-            self.width_of_the_valence_band = self.width_of_the_valence_band/h2ev
+            self.width_of_the_valence_band /= h2ev
 
     def convert2ru(self):
         if self.oscillators.model == 'Drude':
             self.oscillators.A = self.oscillators.A*h2ev*h2ev
-        self.oscillators.gamma = self.oscillators.gamma*h2ev
-        self.oscillators.omega = self.oscillators.omega*h2ev
-        self.Ef = self.Ef*h2ev
-        self.eloss = self.eloss*h2ev
-        self.q = self.q/a0
+        self.oscillators.gamma *= h2ev
+        self.oscillators.omega *= h2ev
+        self.Ef *= h2ev
+        self.eloss *= h2ev
+        self.q /= a0
         if (self.Eg):
-            self.Eg = self.Eg*h2ev
+            self.Eg *= h2ev
+        if (self.U):
+            self.U *= h2ev
+        if (self.width_of_the_valence_band):
+            self.width_of_the_valence_band *= h2ev
 
     def evaluateFsum(self):
         if self.ELF_extended_to_Henke is None:
