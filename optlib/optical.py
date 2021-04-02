@@ -122,12 +122,8 @@ class Material:
         self.IMFP = None
         self.IMFP_E = None
         self.q_dependency = None
-        if isinstance(q, list):
-            self.size_q = len(q)
-            self.q = np.array(q)
-        else:
-            self.size_q = 1
-            self.q = q
+        self.q = np.array(q)
+        self.size_q = self.q.size
 
     @property
     def epsilon(self):
@@ -151,8 +147,8 @@ class Material:
     def calculateDrudeDielectricFunction(self):
         self.convert2au()
         eps_real = self.oscillators.eps_b * \
-            np.squeeze(np.ones((self.eloss.shape[0], self.size_q)))
-        eps_imag = np.squeeze(np.zeros((self.eloss.shape[0], self.size_q)))
+            np.squeeze(np.ones((self.eloss.size, self.size_q)))
+        eps_imag = np.squeeze(np.zeros((self.eloss.size, self.size_q)))
         epsilon = np.zeros_like(eps_real, dtype=complex)
 
         for i in range(len(self.oscillators.A)):
@@ -461,30 +457,30 @@ class Material:
             self.width_of_the_valence_band = self.width_of_the_valence_band*h2ev
 
     def evaluateFsum(self):
-        if self.ELF_extended_to_Henke is None:
-            self.extendToHenke()
+        old_q = self.q
+        self.q = 0
+        self.extendToHenke()
         fsum = 1 / (2 * math.pi**2 * (self.atomic_density * a0**3)) * np.trapz(self.eloss_extended_to_Henke/h2ev * self.ELF_extended_to_Henke, self.eloss_extended_to_Henke/h2ev)
+        self.q = old_q
         return fsum
 
     def evaluateKKsum(self):
-        if self.ELF_extended_to_Henke is None:
-            self.extendToHenke()
+        old_q = self.q
+        self.q = 0
+        self.extendToHenke()
         div = self.ELF_extended_to_Henke / self.eloss_extended_to_Henke
         div[np.isnan(div)] = machine_eps
         kksum = 2 / math.pi * np.trapz(div, self.eloss_extended_to_Henke) + 1/self.static_refractive_index**2
+        self.q = old_q
         return kksum
 
     def extendToHenke(self):
-        if self.ELF is None or self.ELF.shape[0] != self.eloss.shape[0]:
-            self.calculateELF()
+        self.calculateELF()
         energy_henke, elf_henke = self.mopt()
         ind_henke = energy_henke > 100
         ind = self.eloss <= 100
         self.eloss_extended_to_Henke = np.concatenate((self.eloss[ind], energy_henke[ind_henke]))
-        if self.size_q > 1:
-            self.ELF_extended_to_Henke = np.concatenate((self.ELF[ind, 0], elf_henke[ind_henke]))
-        else:
-            self.ELF_extended_to_Henke = np.concatenate((self.ELF[ind], elf_henke[ind_henke]))
+        self.ELF_extended_to_Henke = np.concatenate((self.ELF[ind], elf_henke[ind_henke]))
     
     def mopt(self):
         if self.atomic_density is None:
@@ -718,7 +714,7 @@ class OptFit:
     
     def objective_function(self, osc_vec, grad):
         material = self.vec2Struct(osc_vec)
-        material.calculateDIIMFP(self.E0, 11)
+        material.calculateDIIMFP(self.E0, 10)
         diimfp_interp = np.interp(self.x_exp, material.DIIMFP_E, material.DIIMFP)
         chi_squared = np.sum((self.y_exp - diimfp_interp)**2)
 
@@ -732,7 +728,7 @@ class OptFit:
         if material.oscillators.model == 'Drude':
             cf = material.electron_density * wpc / np.sum(material.oscillators.A)
         else:
-            cf = (1 - 1/material.refractive_index**2) / np.sum(material.oscillators.A)
+            cf = (1 - 1/material.static_refractive_index**2) / np.sum(material.oscillators.A)
         val = np.fabs(cf-1)
 
         if grad.size > 0:
