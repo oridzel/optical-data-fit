@@ -164,7 +164,8 @@ class Material:
 
     def calculateDrudeOscillator(self, omega0, gamma, alpha):
         if not self.q_dependency is None:
-            w_at_q = omega0 + (self.q_dependency(self.q / a0)/h2ev - self.q_dependency(0)/h2ev)
+            w_at_q = omega0 + 0.5 * alpha * self.q**0.5
+            # w_at_q = omega0 + (self.q_dependency(self.q / a0)/h2ev - self.q_dependency(0)/h2ev)
         else:
             w_at_q = omega0 + 0.5 * alpha * self.q**2
 
@@ -220,8 +221,7 @@ class Material:
     def calculateDLLOscillator(self, omega0, gamma, alpha):
         omegaDL = np.sqrt(omega0**2 + self.U**2)
         ratioInt = (omega0 / omegaDL)**2
-        # z1 = ratioInt * self.calculateDLOscillator(omegaDL, gamma, 0.0) + (1.0 - ratioInt) * complex(1)
-        z1 = ratioInt * self.calculateDLOscillator(omegaDL, gamma, alpha) + (1.0 - ratioInt) * complex(1)
+        z1 = ratioInt * self.calculateDLOscillator(omegaDL, gamma, 0.0) + (1.0 - ratioInt) * complex(1)
         return complex(1) / z1
 
 
