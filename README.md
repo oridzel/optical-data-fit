@@ -7,4 +7,5 @@ Make sure you have Python [installed properly](https://docs.python-guide.org/).
 $ git clone git@github.com:szeratul/optical-data-fit.git
 $ cd optical-data-fit
 $ pip install -r requirements.txt
+$ python setup.py install
 ```
