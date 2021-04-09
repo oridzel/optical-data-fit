@@ -508,7 +508,7 @@ class Material:
 
     def readhenke(self, filename):
         i = 0
-        f = open(filename + '.', 'rt')
+        f = open(filename + '.nff', 'rt')
         for line in f:
             if line.startswith('#'):
                 continue
@@ -516,7 +516,7 @@ class Material:
         f.close()
         henke = np.zeros((i, 3))
         i = 0
-        f = open(filename + '.', 'rt')
+        f = open(filename + '.nff', 'rt')
         for line in f:
             if line.startswith('#'):
                 continue
@@ -567,7 +567,7 @@ class Material:
         old_eloss = self.eloss
         old_q = self.q
         old_size_q = self.size_q
-        eloss = linspace(machine_eps, E0, 0.1)
+        eloss = linspace(machine_eps, E0, 0.5)
         self.eloss = eloss
         diimfp = np.zeros_like(self.eloss)
 
@@ -714,7 +714,7 @@ class OptFit:
     
     def objective_function(self, osc_vec, grad):
         material = self.vec2Struct(osc_vec)
-        material.calculateDIIMFP(self.E0, 10)
+        material.calculateDIIMFP(self.E0, 9)
         diimfp_interp = np.interp(self.x_exp, material.DIIMFP_E, material.DIIMFP)
         chi_squared = np.sum((self.y_exp - diimfp_interp)**2)
 
