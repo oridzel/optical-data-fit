@@ -507,22 +507,7 @@ class Material:
         return dataHenke[:, 0], -eps2/(eps1**2 + eps2**2)
 
     def readhenke(self, filename):
-        i = 0
-        f = open(filename + '.nff', 'rt')
-        for line in f:
-            if line.startswith('#'):
-                continue
-            i += 1
-        f.close()
-        henke = np.zeros((i, 3))
-        i = 0
-        f = open(filename + '.nff', 'rt')
-        for line in f:
-            if line.startswith('#'):
-                continue
-            henke[i, :] = line.split()
-            i += 1
-        f.close()
+        henke = np.loadtxt(filename + '.nff', skiprows = 1)
         return henke
 
     def calculateELF(self):
