@@ -612,8 +612,8 @@ class Material:
             raise InputError("Please specify the values of the band gap Eg and the width of the valence band width_of_the_valence_band")
         imfp = np.zeros_like(energy)
         for i in range(energy.shape[0]):
-            self.calculateDIIMFP(energy[i], 12, normalised = False)
-            eloss_step = 0.1
+            self.calculateDIIMFP(energy[i], 9, normalised = False)
+            eloss_step = 0.5
             if isMetal:
                 interp_eloss = linspace(
                     machine_eps, energy[i] - self.Ef, eloss_step)
