@@ -675,9 +675,14 @@ class OptFit:
         self.lb = np.hstack((osc_min_A,osc_min_gamma,osc_min_omega))
         self.ub = np.hstack((osc_max_A,osc_max_gamma,osc_max_omega))
     
-    def runOptimisation(self, maxeval = 1000, xtol_rel = 1e-6):
+    def runOptimisation(self, fitGoal, maxeval = 1000, xtol_rel = 1e-6):
         opt = nlopt.opt(nlopt.LN_COBYLA, len(self.struct2Vec(self.material)))
-        opt.set_min_objective(self.objective_function)
+        if fitGoal == 'elf':
+            opt.set_min_objective(self.objective_function_elf)
+        elif fitGoal == 'ndiimfp':
+            opt.set_min_objective(self.objective_function_ndiimfp)
+        else:
+            raise InputError("Please specify fitGoal (elf or ndiimfp)")
         self.setBounds()
         opt.set_lower_bounds(self.lb)
         opt.set_upper_bounds(self.ub)
@@ -697,11 +702,21 @@ class OptFit:
         material.oscillators.omega = oscillators[2]
         return material
     
-    def objective_function(self, osc_vec, grad):
+    def objective_function_ndiimfp(self, osc_vec, grad):
         material = self.vec2Struct(osc_vec)
         material.calculateDIIMFP(self.E0, 9)
         diimfp_interp = np.interp(self.x_exp, material.DIIMFP_E, material.DIIMFP)
         chi_squared = np.sum((self.y_exp - diimfp_interp)**2)
+
+        if grad.size > 0:
+            grad = np.array([0,0.5/chi_squared])
+        return chi_squared
+
+    def objective_function_elf(self, osc_vec, grad):
+        material = self.vec2Struct(osc_vec)
+        material.calculateELF()
+        elf_interp = np.interp(self.x_exp, material.eloss, material.ELF)
+        chi_squared = np.sum((self.y_exp - elf_interp)**2)
 
         if grad.size > 0:
             grad = np.array([0,0.5/chi_squared])
