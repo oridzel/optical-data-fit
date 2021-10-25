@@ -1,2 +1,3 @@
 init:
-	pip install -r requirements.txt
+	pip3 install -r requirements.txt
+	python3.9 setup.py install

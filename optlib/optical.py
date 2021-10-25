@@ -470,7 +470,7 @@ class Material:
         self.extendToHenke()
         div = self.ELF_extended_to_Henke / self.eloss_extended_to_Henke
         div[np.isnan(div)] = machine_eps
-        kksum = 2 / math.pi * np.trapz(div, self.eloss_extended_to_Henke) + 1/self.static_refractive_index**2
+        kksum = 2 / math.pi * np.trapz(div, self.eloss_extended_to_Henke) + 1 / self.static_refractive_index**2
         self.q = old_q
         return kksum
 
@@ -486,25 +486,27 @@ class Material:
         if self.atomic_density is None:
             raise InputError("Please specify the value of the atomic density atomic_density")
         numberOfElements = len(self.composition.elements)
-        f1sum = 0
-        f2sum = 0
+        energy = linspace(100,30000)
+        f1sum = np.zeros_like(energy)
+        f2sum = np.zeros_like(energy)
 
         for i in range(numberOfElements):
-            dataHenke = self.readhenke(
-                self.xraypath + self.composition.elements[i])
-            f1sum += dataHenke[:, 1] * self.composition.indices[i]
-            f2sum += dataHenke[:, 2] * self.composition.indices[i]
+            dataHenke = self.readhenke(self.xraypath + self.composition.elements[i])
+            f1 = np.interp(energy, dataHenke[:, 0], dataHenke[:, 1])
+            f2 = np.interp(energy, dataHenke[:, 0], dataHenke[:, 2])
+            f1sum += f1 * self.composition.indices[i]
+            f2sum += f2 * self.composition.indices[i]
 
-        lambd = hc/(dataHenke[:, 0]/1000)
+        lambda_ = hc/(energy/1000)
         f1sum /= np.sum(self.composition.indices)
         f2sum /= np.sum(self.composition.indices)
 
-        n = 1 - self.atomic_density * r0 * 1e10 * lambd**2 * f1sum/2/math.pi
-        k = -self.atomic_density * r0 * 1e10 * lambd**2 * f2sum/2/math.pi
+        n = 1 - self.atomic_density * r0 * 1e10 * lambda_**2 * f1sum/2/math.pi
+        k = -self.atomic_density * r0 * 1e10 * lambda_**2 * f2sum/2/math.pi
 
         eps1 = n**2 - k**2
         eps2 = 2*n*k
-        return dataHenke[:, 0], -eps2/(eps1**2 + eps2**2)
+        return energy, -eps2/(eps1**2 + eps2**2)
 
     def readhenke(self, filename):
         henke = np.loadtxt(filename + '.nff', skiprows = 1)
