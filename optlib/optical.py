@@ -136,6 +136,16 @@ class Material:
 		self.calculateDielectricFunction()
 		return self._epsilon
 
+	def kramers_kronig(self, elf):
+		oneover_eps_real = np.zeros_like(self.eloss)
+		for i in range(self.eloss.size):
+			kk_sum = 0
+			omega = self.eloss[i]
+			ind = self.eloss != omega
+			kk_sum += np.trapz(self.eloss[ind] * elf[ind] / (self.eloss[ind] - omega), self.eloss[ind])
+			oneover_eps_real[i] = 2 * kk_sum / math.pi + 1
+		return oneover_eps_real
+
 	def calculateDielectricFunction(self):
 		if self.oscillators.model == 'Drude':
 			self._epsilon = self.calculateDrudeDielectricFunction()
@@ -165,6 +175,15 @@ class Material:
 
 		epsilon.real = eps_real
 		epsilon.imag = eps_imag
+
+		if self.Eg > 0:
+			one_over_eps_imag = (1 / epsilon).imag
+			one_over_eps_imag[self.eloss <= self.Eg] = 0
+			one_over_eps_real = self.kramers_kronig(one_over_eps_imag)
+			one_over_eps = np.squeeze(np.apply_along_axis(lambda args: [complex(
+				*args)], 0, np.array([one_over_eps_real, one_over_eps_imag])))
+			epsilon = complex(1) / (one_over_eps + complex(1))
+
 		self.convert2ru()
 		return epsilon
 
@@ -242,13 +261,17 @@ class Material:
 		mm = omega**2 - w_at_q**2
 		divisor = mm**2 + omega**2 * gamma**2
 
-		oneover_eps_real = 1.0 + omega0**2 * mm / divisor
-		oneover_eps_imag = -omega0**2 * omega * gamma / divisor
+		one_over_eps_imag = -omega0**2 * omega * gamma / divisor
+		if self.Eg > 0:
+			one_over_eps_imag[self.eloss <= self.Eg] = 0
+			one_over_eps_real = self.kramers_kronig(one_over_eps_imag)
+		else:
+			one_over_eps_real = 1.0 + omega0**2 * mm / divisor
 
-		oneover_eps = np.squeeze(np.apply_along_axis(lambda args: [complex(
-			*args)], 0, np.array([oneover_eps_real, oneover_eps_imag])))
+		one_over_eps = np.squeeze(np.apply_along_axis(lambda args: [complex(
+			*args)], 0, np.array([one_over_eps_real, one_over_eps_imag])))
 
-		return oneover_eps
+		return one_over_eps
 
 	def calculateMerminDielectricFunction(self):
 		if self.size_q == 1 and self.q == 0:
@@ -575,10 +598,8 @@ class Material:
 		diimfp = np.zeros_like(self.eloss)
 
 		if self.oscillators.alpha == 0 and self.oscillators.model != 'Mermin' and self.oscillators.model != 'MerminLL' and self.q_dependency is None:
-			q_minus = np.sqrt(2 * E0/h2ev) - np.sqrt(2 *
-														(E0/h2ev - self.eloss/h2ev))
-			q_plus = np.sqrt(2 * E0/h2ev) + np.sqrt(2 *
-													(E0/h2ev - self.eloss/h2ev))
+			q_minus = np.sqrt(2 * E0/h2ev) - np.sqrt(2 * (E0/h2ev - self.eloss/h2ev))
+			q_plus = np.sqrt(2 * E0/h2ev) + np.sqrt(2 * (E0/h2ev - self.eloss/h2ev))
 			self.extendToHenke()
 			int_limits = np.log(q_plus/q_minus)
 			int_limits[np.isinf(int_limits)] = machine_eps
