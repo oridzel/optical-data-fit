@@ -130,6 +130,7 @@ class Material:
 		self.use_KK_constraint = False
 		self.use_henke_for_ne = False
 		self.electron_density_Henke = 0
+		self.use_kk_relation = False
 
 	@property
 	def epsilon(self):
@@ -137,14 +138,13 @@ class Material:
 		return self._epsilon
 
 	def kramers_kronig(self, elf):
-		oneover_eps_real = np.zeros_like(self.eloss)
+		eps_real = np.zeros_like(self.eloss)
 		for i in range(self.eloss.size):
-			kk_sum = 0
 			omega = self.eloss[i]
-			ind = self.eloss != omega
-			kk_sum += np.trapz(self.eloss[ind] * elf[ind] / (self.eloss[ind] - omega), self.eloss[ind])
-			oneover_eps_real[i] = 2 * kk_sum / math.pi + 1
-		return oneover_eps_real
+			ind = np.all([self.eloss != omega, self.eloss != self.Eg], axis=0)
+			kk_sum = np.trapz(self.eloss[ind] * elf[ind] / (self.eloss[ind] ** 2 - omega ** 2), self.eloss[ind])
+			eps_real[i] = 2 * kk_sum / math.pi + 1
+		return eps_real
 
 	def calculateDielectricFunction(self):
 		if self.oscillators.model == 'Drude':
@@ -173,16 +173,13 @@ class Material:
 			eps_real -= self.oscillators.A[i] * epsDrude_real
 			eps_imag += self.oscillators.A[i] * epsDrude_imag
 
+		if self.Eg > 0:
+			eps_imag[self.eloss <= self.Eg] = 0
+		if self.use_kk_relation:
+			eps_real = self.kramers_kronig(eps_imag)
+
 		epsilon.real = eps_real
 		epsilon.imag = eps_imag
-
-		if self.Eg > 0:
-			one_over_eps_imag = (1 / epsilon).imag
-			one_over_eps_imag[self.eloss <= self.Eg] = 0
-			one_over_eps_real = self.kramers_kronig(one_over_eps_imag)
-			one_over_eps = np.squeeze(np.apply_along_axis(lambda args: [complex(
-				*args)], 0, np.array([one_over_eps_real, one_over_eps_imag])))
-			epsilon = complex(1) / (one_over_eps + complex(1))
 
 		self.convert2ru()
 		return epsilon
@@ -240,6 +237,7 @@ class Material:
 
 		sum_oneover_eps += complex(1)
 		epsilon = complex(1) / sum_oneover_eps
+
 		self.convert2ru()
 		return epsilon
 
@@ -264,6 +262,7 @@ class Material:
 		one_over_eps_imag = -omega0**2 * omega * gamma / divisor
 		if self.Eg > 0:
 			one_over_eps_imag[self.eloss <= self.Eg] = 0
+		if self.use_kk_relation:
 			one_over_eps_real = self.kramers_kronig(one_over_eps_imag)
 		else:
 			one_over_eps_real = 1.0 + omega0**2 * mm / divisor
