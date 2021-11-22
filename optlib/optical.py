@@ -5,6 +5,8 @@ from typing import List
 import nlopt
 import copy
 import pandas as pd
+from scipy.integrate import quad
+from sympy.integrals.singularityfunctions import singularityintegrate
 
 hc = 12.3981756608  # planck constant times velocity of light keV Angstr
 r0 = 2.8179403227e-15
@@ -137,12 +139,12 @@ class Material:
 		self.calculateDielectricFunction()
 		return self._epsilon
 
-	def kramers_kronig(self, elf):
+	def kramers_kronig(self, epsilon_imag):
 		eps_real = np.zeros_like(self.eloss)
 		for i in range(self.eloss.size):
 			omega = self.eloss[i]
-			ind = np.all([self.eloss != omega, self.eloss != self.Eg], axis=0)
-			kk_sum = np.trapz(self.eloss[ind] * elf[ind] / (self.eloss[ind] ** 2 - omega ** 2), self.eloss[ind])
+			ind = np.all([self.eloss != omega, self.eloss > self.Eg], axis=0)
+			kk_sum = np.trapz(self.eloss[ind] * epsilon_imag[ind] / (self.eloss[ind] ** 2 - omega ** 2), self.eloss[ind])
 			eps_real[i] = 2 * kk_sum / math.pi + 1
 		return eps_real
 
@@ -238,6 +240,12 @@ class Material:
 		sum_oneover_eps += complex(1)
 		epsilon = complex(1) / sum_oneover_eps
 
+		if self.use_kk_relation:
+			eps_imag = epsilon.imag
+			eps_real = self.kramers_kronig(eps_imag)
+			epsilon.real = eps_real
+			epsilon.imag = eps_imag
+
 		self.convert2ru()
 		return epsilon
 
@@ -262,10 +270,10 @@ class Material:
 		one_over_eps_imag = -omega0**2 * omega * gamma / divisor
 		if self.Eg > 0:
 			one_over_eps_imag[self.eloss <= self.Eg] = 0
-		if self.use_kk_relation:
-			one_over_eps_real = self.kramers_kronig(one_over_eps_imag)
-		else:
-			one_over_eps_real = 1.0 + omega0**2 * mm / divisor
+		# if self.use_kk_relation:
+		# 	one_over_eps_real = self.kramers_kronig(one_over_eps_imag)
+		# else:
+		one_over_eps_real = 1.0 + omega0**2 * mm / divisor
 
 		one_over_eps = np.squeeze(np.apply_along_axis(lambda args: [complex(
 			*args)], 0, np.array([one_over_eps_real, one_over_eps_imag])))
