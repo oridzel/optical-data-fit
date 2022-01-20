@@ -144,7 +144,10 @@ class Material:
 		for i in range(self.eloss.size):
 			omega = self.eloss[i]
 			ind = np.all([self.eloss != omega, self.eloss > self.Eg], axis=0)
-			kk_sum = np.trapz(self.eloss[ind] * epsilon_imag[ind] / (self.eloss[ind] ** 2 - omega ** 2), self.eloss[ind])
+			if len(epsilon_imag.shape) > 1:
+				kk_sum = np.trapz(self.eloss[ind] * epsilon_imag[ind][0] / (self.eloss[ind] ** 2 - omega ** 2), self.eloss[ind])
+			else:
+				kk_sum = np.trapz(self.eloss[ind] * epsilon_imag[ind] / (self.eloss[ind] ** 2 - omega ** 2), self.eloss[ind])
 			eps_real[i] = 2 * kk_sum / math.pi + 1
 		return eps_real
 
@@ -187,11 +190,11 @@ class Material:
 		return epsilon
 
 	def calculateDrudeOscillator(self, omega0, gamma, alpha):
-		if not self.q_dependency is None:
-			w_at_q = omega0 + 0.5 * alpha * self.q**0.5
+		# if not self.q_dependency is None:
+		# 	w_at_q = omega0 + 0.5 * alpha * self.q**0.5
 			# w_at_q = omega0 + (self.q_dependency(self.q / a0)/h2ev - self.q_dependency(0)/h2ev)
-		else:
-			w_at_q = omega0 + 0.5 * alpha * self.q**2
+		# else:
+		w_at_q = omega0 + 0.5 * alpha * self.q**2
 
 		omega = np.squeeze(np.array([self.eloss, ] * self.size_q).transpose())
 
@@ -297,7 +300,17 @@ class Material:
 				epsMermin = complex(1)
 			oneovereps += self.oscillators.A[i] * (complex(1) / epsMermin)
 		oneovereps += complex(1) - complex(np.sum(self.oscillators.A))
+		
+		if self.Eg > 0:
+			oneovereps.imag[self.eloss <= self.Eg] = 0
+
 		epsilon = complex(1) / oneovereps
+		if self.use_kk_relation:
+			eps_imag = epsilon.imag
+			eps_real = self.kramers_kronig(eps_imag)
+			epsilon.real = eps_real
+			epsilon.imag = eps_imag
+
 		self.convert2ru()
 		return epsilon
 
@@ -735,7 +748,7 @@ class OptFit:
 		opt.set_upper_bounds(self.ub)
 		if self.material.use_henke_for_ne:
 			if self.material.eloss_Henke is None and self.material.ELF_Henke is None:
-				self.material.eloss_Henke, self.material.ELF_Henke = material.mopt()
+				self.material.eloss_Henke, self.material.ELF_Henke = self.material.mopt()
 			self.material.electron_density_Henke = self.material.atomic_density * self.material.Z * a0 ** 3 - \
 				1 / (2 * math.pi**2) * np.trapz(self.material.eloss_Henke / h2ev * self.material.ELF_Henke, self.material.eloss_Henke / h2ev)
 			print(f"Electron density = {self.material.electron_density_Henke / a0 ** 3}")
