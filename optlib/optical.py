@@ -803,27 +803,23 @@ class OptFit:
 
 	def struct2Vec(self, osc_struct):
 		if osc_struct.oscillators.model == 'MerminLL' or osc_struct.oscillators.model == 'DLL':
-			vec = np.append( np.append( np.hstack((osc_struct.oscillators.A,osc_struct.oscillators.gamma,osc_struct.oscillators.omega)), osc_struct.oscillators.alpha ), osc_struct.oscillators.U )
+			vec = np.append( np.hstack((osc_struct.oscillators.A,osc_struct.oscillators.gamma,osc_struct.oscillators.omega)), osc_struct.oscillators.U )
 		else:
-			np.append( np.hstack((osc_struct.oscillators.A,osc_struct.oscillators.gamma,osc_struct.oscillators.omega)), osc_struct.oscillators.alpha )
+			vec = np.append( np.hstack((osc_struct.oscillators.A,osc_struct.oscillators.gamma,osc_struct.oscillators.omega)), osc_struct.oscillators.alpha )
 		return vec
 
 	def vec2Struct(self, osc_vec):
+		oscillators = np.split(osc_vec[0:-1],3)
+		material = copy.deepcopy(self.material)
+		material.oscillators.A = oscillators[0]
+		material.oscillators.gamma = oscillators[1]
+		material.oscillators.omega = oscillators[2]
+
 		if self.material.oscillators.model == 'MerminLL' or self.material.oscillators.model == 'DLL':
-			oscillators = np.split(osc_vec[0:-2],3)
-			material = copy.deepcopy(self.material)
-			material.oscillators.A = oscillators[0]
-			material.oscillators.gamma = oscillators[1]
-			material.oscillators.omega = oscillators[2]
-			material.oscillators.alpha = osc_vec[-2]
 			material.oscillators.U = osc_vec[-1]
 		else:
-			oscillators = np.split(osc_vec[0:-1],3)
-			material = copy.deepcopy(self.material)
-			material.oscillators.A = oscillators[0]
-			material.oscillators.gamma = oscillators[1]
-			material.oscillators.omega = oscillators[2]
 			material.oscillators.alpha = osc_vec[-1]
+			
 		return material
 
 	def objective_function_ndiimfp(self, osc_vec, grad):
