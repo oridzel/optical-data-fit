@@ -752,23 +752,26 @@ class OptFit:
 		osc_min_A = np.ones_like(self.material.oscillators.A) * 1e-10
 		osc_min_gamma = np.ones_like(self.material.oscillators.gamma) * 0.025
 		osc_min_omega = np.ones_like(self.material.oscillators.omega) * self.material.Eg
-		osc_min_alpha = 0.0
-
+		
 		if self.material.oscillators.model == 'Drude':
 			osc_max_A = np.ones_like(self.material.oscillators.A) * 2e3
 		else:
 			osc_max_A = np.ones_like(self.material.oscillators.A)
 
 		osc_max_gamma = np.ones_like(self.material.oscillators.gamma) * 100
-		osc_max_omega = np.ones_like(self.material.oscillators.omega) * self.x_exp[-1]
-		osc_max_alpha = 1.0
+		osc_max_omega = np.ones_like(self.material.oscillators.omega) * self.x_exp[-1]		
 
 		if self.material.oscillators.model == 'DLL' or self.material.oscillators.model == 'MerminLL':
 			osc_min_U = 0.0
 			osc_max_U = 10.0
-			self.lb = np.append( np.append( np.hstack((osc_min_A,osc_min_gamma,osc_min_omega)), osc_min_alpha), osc_min_U )
-			self.ub = np.append( np.append( np.hstack((osc_max_A,osc_max_gamma,osc_max_omega)), osc_max_alpha), osc_max_U )
+			self.lb = np.append( np.hstack((osc_min_A,osc_min_gamma,osc_min_omega)), osc_min_U )
+			self.ub = np.append( np.hstack((osc_max_A,osc_max_gamma,osc_max_omega)), osc_max_U )
+		elif self.material.oscillators.model == 'Mermin':
+			self.lb = np.hstack((osc_min_A,osc_min_gamma,osc_min_omega))
+			self.ub = np.hstack((osc_max_A,osc_max_gamma,osc_max_omega))
 		else:
+			osc_min_alpha = 0.0
+			osc_max_alpha = 1.0
 			self.lb = np.append( np.hstack((osc_min_A,osc_min_gamma,osc_min_omega)), osc_min_alpha )
 			self.ub = np.append( np.hstack((osc_max_A,osc_max_gamma,osc_max_omega)), osc_max_alpha )
 
@@ -804,6 +807,8 @@ class OptFit:
 	def struct2Vec(self, osc_struct):
 		if osc_struct.oscillators.model == 'MerminLL' or osc_struct.oscillators.model == 'DLL':
 			vec = np.append( np.hstack((osc_struct.oscillators.A,osc_struct.oscillators.gamma,osc_struct.oscillators.omega)), osc_struct.oscillators.U )
+		elif self.material.oscillators.model == 'Mermin':
+			vec = np.hstack((osc_struct.oscillators.A,osc_struct.oscillators.gamma,osc_struct.oscillators.omega))
 		else:
 			vec = np.append( np.hstack((osc_struct.oscillators.A,osc_struct.oscillators.gamma,osc_struct.oscillators.omega)), osc_struct.oscillators.alpha )
 		return vec
@@ -817,7 +822,7 @@ class OptFit:
 
 		if self.material.oscillators.model == 'MerminLL' or self.material.oscillators.model == 'DLL':
 			material.oscillators.U = osc_vec[-1]
-		else:
+		elif self.material.oscillators.model != 'Mermin':
 			material.oscillators.alpha = osc_vec[-1]
 			
 		return material
