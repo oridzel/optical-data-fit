@@ -6,6 +6,7 @@ import nlopt
 import copy
 import pandas as pd
 from scipy.integrate import quad
+from scipy.stats import chisquare
 from sympy.integrals.singularityfunctions import singularityintegrate
 
 hc = 12.3981756608  # planck constant times velocity of light keV Angstr
@@ -734,16 +735,22 @@ class Material:
 		with open(f'{self.name}_{self.oscillators.model}_table_optical_data.csv', 'w') as tf:
 			tf.write(df.to_csv(index=False))
 
+class exp_data:
+	def __init__(self):
+		self.x_elf = []
+		self.y_elf = []
+		self.x_ndiimfp = []
+		self.y_ndiimfp = []
+
 class OptFit:
 
-	def __init__(self, material, x_exp, y_exp, E0, dE = 0.5, n_q = 10):
+	def __init__(self, material, exp_data, E0, dE = 0.5, n_q = 10):
 		if not isinstance(material, Material):
 			raise InputError("The material must be of the type Material")
 		if E0 == 0:
 			raise InputError("E0 must be non-zero")
 		self.material = material
-		self.x_exp = x_exp
-		self.y_exp = y_exp
+		self.exp_data = exp_data
 		self.E0 = E0
 		self.dE = dE
 		self.n_q = n_q
@@ -759,7 +766,7 @@ class OptFit:
 			osc_max_A = np.ones_like(self.material.oscillators.A)
 
 		osc_max_gamma = np.ones_like(self.material.oscillators.gamma) * 100
-		osc_max_omega = np.ones_like(self.material.oscillators.omega) * self.x_exp[-1]		
+		osc_max_omega = np.ones_like(self.material.oscillators.omega) * 500		
 
 		if self.material.oscillators.model == 'DLL' or self.material.oscillators.model == 'MerminLL':
 			osc_min_U = 0.0
@@ -776,14 +783,16 @@ class OptFit:
 			self.ub = np.append( np.hstack((osc_max_A,osc_max_gamma,osc_max_omega)), osc_max_alpha )
 
 	def runOptimisation(self, fitGoal, maxeval = 1000, xtol_rel = 1e-6):
-		print('Start optimisation')
+		print('Starting optimisation...')
 		opt = nlopt.opt(nlopt.LN_COBYLA, len(self.struct2Vec(self.material)))
 		if fitGoal == 'elf':
 			opt.set_min_objective(self.objective_function_elf)
 		elif fitGoal == 'ndiimfp':
 			opt.set_min_objective(self.objective_function_ndiimfp)
+		elif fitGoal == 'elf+ndiimfp':
+			opt.set_min_objective(self.objective_function)
 		else:
-			raise InputError("Please specify fitGoal (elf or ndiimfp)")
+			raise InputError("Please specify fitGoal (elf, ndiimfp or elf+ndiimfp)")
 		self.setBounds()
 		opt.set_lower_bounds(self.lb)
 		opt.set_upper_bounds(self.ub)
@@ -793,13 +802,13 @@ class OptFit:
 			self.material.electron_density_Henke = self.material.atomic_density * self.material.Z * a0 ** 3 - \
 				1 / (2 * math.pi**2) * np.trapz(self.material.eloss_Henke / h2ev * self.material.ELF_Henke, self.material.eloss_Henke / h2ev)
 			print(f"Electron density = {self.material.electron_density_Henke / a0 ** 3}")
-			opt.add_inequality_constraint(self.constraint_function_henke)
+			opt.add_equality_constraint(self.constraint_function_henke)
 			if self.material.use_KK_constraint:
-				opt.add_inequality_constraint(self.constraint_function_refind_henke)
+				opt.add_equality_constraint(self.constraint_function_refind_henke)
 		else:
-			opt.add_inequality_constraint(self.constraint_function)
+			opt.add_equality_constraint(self.constraint_function)
 			if self.material.use_KK_constraint:
-				opt.add_inequality_constraint(self.constraint_function_refind)
+				opt.add_equality_constraint(self.constraint_function_refind)
 		opt.set_maxeval(maxeval)
 		opt.set_xtol_rel(xtol_rel)
 		return opt.optimize(self.struct2Vec(self.material))
@@ -830,8 +839,8 @@ class OptFit:
 	def objective_function_ndiimfp(self, osc_vec, grad):
 		material = self.vec2Struct(osc_vec)
 		material.calculateDIIMFP(self.E0, self.dE, self.n_q)
-		diimfp_interp = np.interp(self.x_exp, material.DIIMFP_E, material.DIIMFP)
-		chi_squared = np.sum((self.y_exp - diimfp_interp)**2)
+		diimfp_interp = np.interp(self.exp_data.x_ndiimfp, material.DIIMFP_E, material.DIIMFP)
+		chi_squared = np.sum((self.exp_data.y_ndiimfp - diimfp_interp)**2)
 
 		if grad.size > 0:
 			grad = np.array([0, 0.5/chi_squared])
@@ -840,8 +849,25 @@ class OptFit:
 	def objective_function_elf(self, osc_vec, grad):
 		material = self.vec2Struct(osc_vec)
 		material.calculateELF()
-		elf_interp = np.interp(self.x_exp, material.eloss, material.ELF)
-		chi_squared = np.sum((self.y_exp - elf_interp)**2)
+		elf_interp = np.interp(self.exp_data.x_elf, material.eloss, material.ELF)
+		chi_squared = np.sum((self.exp_data.y_elf - elf_interp)**2)
+
+		if grad.size > 0:
+			grad = np.array([0, 0.5/chi_squared])
+		return chi_squared
+
+	def objective_function(self, osc_vec, grad):
+		material = self.vec2Struct(osc_vec)
+		material.calculateDIIMFP(self.E0, self.dE, self.n_q)
+		material.calculateELF()
+		diimfp_interp = np.interp(self.exp_data.x_ndiimfp, material.DIIMFP_E, material.DIIMFP)
+		elf_interp = np.interp(self.exp_data.x_elf, material.eloss, material.ELF)
+
+		# observed = np.concatenate((diimfp_interp, elf_interp))
+		# expected = np.concatenate((self.exp_data.y_ndiimfp, self.exp_data.y_elf))
+
+		chi_squared = np.mean((np.sum((self.exp_data.y_ndiimfp - diimfp_interp)**2), np.sum((self.exp_data.y_elf - elf_interp)**2)))
+		# chi_squared = np.sum( (observed - expected)**2 / expected )
 
 		if grad.size > 0:
 			grad = np.array([0, 0.5/chi_squared])
