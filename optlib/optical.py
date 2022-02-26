@@ -146,7 +146,6 @@ class Material:
 	
 	@q.setter
 	def q(self, q):
-		print ("q changed to", q)
 		try: 
 			self.size_q = q.shape[1]
 		except IndexError:
@@ -717,7 +716,6 @@ class Material:
 			q = np.linspace(q_minus, q_plus, 2**(decdigs - 1), axis = 1)
 			if (self.oscillators.model == 'Mermin' or self.oscillators.model == 'MerminLL'):
 				q[q == 0] = 0.01
-			self.size_q = q.shape[1]
 			self.q = q / a0
 			self.calculateELF()
 			integrand = self.ELF / q
@@ -729,7 +727,7 @@ class Material:
 		diimfp[np.isnan(diimfp)] = machine_eps
 		self.eloss = old_eloss
 		self.q = old_q
-		self.size_q = old_size_q
+
 		if normalised:
 			diimfp = diimfp / np.trapz(diimfp, eloss)
 		self.DIIMFP = diimfp
