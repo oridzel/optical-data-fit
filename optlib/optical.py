@@ -129,12 +129,31 @@ class Material:
 		self.IMFP = None
 		self.IMFP_E = None
 		self.q_dependency = None
-		self.q = np.array(q)
-		self.size_q = self.q.size
+		self._q = q
 		self.use_KK_constraint = False
 		self.use_henke_for_ne = False
 		self.electron_density_Henke = 0
 		self.use_kk_relation = False
+
+	@property
+	def q(self):
+		if isinstance(self._q, np.ndarray):
+			return self._q
+		elif isinstance(self._q,list):
+			return np.array(self._q)
+		else:
+			return self._q
+	
+	@q.setter
+	def q(self, q):
+		print ("q changed to", q)
+		try: 
+			self.size_q = q.shape[1]
+		except IndexError:
+			self.size_q = q.shape[0]
+		except:
+			self.size_q = 1
+		self._q = q
 
 	@property
 	def epsilon(self):
@@ -158,8 +177,6 @@ class Material:
 			self._epsilon = self.calculateDrudeDielectricFunction()
 		elif self.oscillators.model == 'DrudeLindhard':
 			self._epsilon = self.calculateDLDielectricFunction()
-		elif self.oscillators.model == 'DLL':
-			self._epsilon = self.calculateDLLDielectricFunction()
 		elif self.oscillators.model == 'Mermin':
 			self._epsilon = self.calculateMerminDielectricFunction()
 		elif self.oscillators.model == 'MerminLL':
@@ -170,8 +187,8 @@ class Material:
 	def calculateDrudeDielectricFunction(self):
 		self.convert2au()
 		eps_real = self.oscillators.eps_b * \
-			np.squeeze(np.ones((self.eloss.size, self.size_q)))
-		eps_imag = np.squeeze(np.zeros((self.eloss.size, self.size_q)))
+			np.squeeze(np.ones((self.eloss.shape[0], self.size_q)))
+		eps_imag = np.squeeze(np.zeros((self.eloss.shape[0], self.size_q)))
 		epsilon = np.zeros_like(eps_real, dtype=complex)
 
 		for i in range(len(self.oscillators.A)):
@@ -197,7 +214,6 @@ class Material:
 			# w_at_q = omega0 + (self.q_dependency(self.q / a0)/h2ev - self.q_dependency(0)/h2ev)
 		# else:
 		w_at_q = omega0 + 0.5 * alpha * self.q**2
-
 		omega = np.squeeze(np.array([self.eloss, ] * self.size_q).transpose())
 
 		mm = omega**2 - w_at_q**2
@@ -207,26 +223,6 @@ class Material:
 		eps_imag = omega*gamma / divisor
 
 		return eps_real, eps_imag
-
-	def calculateDLLDielectricFunction(self):
-		if self.U == 0:
-			raise InputError("Please specify the value of U")
-		if self.size_q == 1 and self.q == 0:
-			self.q = 0.01
-		self.convert2au()
-		epsilon = np.squeeze(
-			np.zeros((self.eloss.shape[0], self.size_q), dtype=complex))
-		oneovereps = np.squeeze(
-			np.zeros((self.eloss.shape[0], self.size_q), dtype=complex))
-
-		for i in range(len(self.oscillators.A)):
-			epsDL = self.calculateDLLOscillator(
-				self.oscillators.omega[i], self.oscillators.gamma[i])
-			oneovereps += self.oscillators.A[i] * (complex(1) / epsDL - complex(1))
-		oneovereps += complex(1)
-		epsilon = complex(1) / oneovereps
-		self.convert2ru()
-		return epsilon
 
 	def calculateDLDielectricFunction(self):
 		self.convert2au()
@@ -723,8 +719,8 @@ class Material:
 				q[q == 0] = 0.01
 			self.size_q = q.shape[1]
 			self.q = q / a0
-			self.calculateDielectricFunction()
-			integrand = (-1/self._epsilon).imag / q
+			self.calculateELF()
+			integrand = self.ELF / q
 			integrand[q == 0] = 0
 			if (self.oscillators.model == 'Mermin' or self.oscillators.model == 'MerminLL'):
 				integrand[q == 0.01] = 0
@@ -961,21 +957,15 @@ class OptFit:
 		self.count += 1;
 		material = self.vec2Struct(osc_vec)
 		material.calculateDIIMFP(self.E0, self.dE, self.n_q)
-		material.ELF = (-1/material._epsilon).imag
+		material.ELF = (-1/material._epsilon).imag[:,0]
 		diimfp_interp = np.interp(self.exp_data.x_ndiimfp, material.DIIMFP_E, material.DIIMFP)
 		elf_interp = np.interp(self.exp_data.x_elf, material.DIIMFP_E, material.ELF)
 
-		observed = np.concatenate((diimfp_interp, elf_interp))
-		# expected = np.concatenate((self.exp_data.y_ndiimfp, self.exp_data.y_elf))
-		# expected[expected == 0] = 1e-6
-		# dev = (observed - expected)**2 # / (expected * 0.1) )
-		# chi_squared = np.sum( dev ) / len(dev)
+		ind_ndiimfp = self.exp_data.y_ndiimfp >= 0
+		ind_elf = self.exp_data.y_elf >= 0
 
-		# self.exp_data.y_ndiimfp[self.exp_data.y_ndiimfp <= 0] = 1e-10
-		# self.exp_data.y_elf[self.exp_data.y_elf <= 0] = 1e-10
-		# chi_squared = self.diimfp_coef*np.sum((self.exp_data.y_ndiimfp - diimfp_interp)**2 / self.exp_data.y_ndiimfp) + self.elf_coef*np.sum((self.exp_data.y_elf - elf_interp)**2 / self.exp_data.y_elf)
-		chi_squared = self.diimfp_coef*np.sum((self.exp_data.y_ndiimfp - diimfp_interp)**2) + self.elf_coef*np.sum((self.exp_data.y_elf - elf_interp)**2)
-		chi_squared /= len(observed)
+		chi_squared = self.diimfp_coef*np.sqrt(np.sum((self.exp_data.y_ndiimfp[ind_ndiimfp] - diimfp_interp[ind_ndiimfp])**2 / len(self.exp_data.y_ndiimfp[ind_ndiimfp]))) + \
+						self.elf_coef*np.sqrt(np.sum((self.exp_data.y_elf[ind_elf] - elf_interp[ind_elf])**2) / len(self.exp_data.y_elf[ind_elf]))
 
 		if grad.size > 0:
 			grad = np.array([0, 0.5/chi_squared])
