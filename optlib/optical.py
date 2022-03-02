@@ -667,7 +667,6 @@ class Material:
 	def calculateDIIMFP(self, E0, dE = 0.5, decdigs = 10, normalised = True):
 		old_eloss = self.eloss
 		old_q = self.q
-		old_size_q = self.size_q
 		old_E0 = E0
 
 		if (self.Eg > 0):
@@ -884,19 +883,19 @@ class OptFit:
 			opt.set_lower_bounds(self.lb)
 			opt.set_upper_bounds(self.ub)
 
-			if self.material.use_henke_for_ne:
-				if self.material.eloss_Henke is None and self.material.ELF_Henke is None:
-					self.material.eloss_Henke, self.material.ELF_Henke = self.material.mopt()
-				self.material.electron_density_Henke = self.material.atomic_density * self.material.Z * a0 ** 3 - \
-					1 / (2 * math.pi**2) * np.trapz(self.material.eloss_Henke / h2ev * self.material.ELF_Henke, self.material.eloss_Henke / h2ev)
-				print(f"Electron density = {self.material.electron_density_Henke / a0 ** 3}")
-				opt.add_equality_constraint(self.constraint_function_henke)
-				if self.material.use_KK_constraint and self.material.oscillators.model != 'Drude':
-					opt.add_equality_constraint(self.constraint_function_refind_henke)
-			else:
-				opt.add_equality_constraint(self.constraint_function)
-				if self.material.use_KK_constraint and self.material.oscillators.model != 'Drude':
-					opt.add_equality_constraint(self.constraint_function_refind)
+			# if self.material.use_henke_for_ne:
+			# 	if self.material.eloss_Henke is None and self.material.ELF_Henke is None:
+			# 		self.material.eloss_Henke, self.material.ELF_Henke = self.material.mopt()
+			# 	self.material.electron_density_Henke = self.material.atomic_density * self.material.Z * a0 ** 3 - \
+			# 		1 / (2 * math.pi**2) * np.trapz(self.material.eloss_Henke / h2ev * self.material.ELF_Henke, self.material.eloss_Henke / h2ev)
+			# 	print(f"Electron density = {self.material.electron_density_Henke / a0 ** 3}")
+			# 	opt.add_equality_constraint(self.constraint_function_henke)
+			# 	if self.material.use_KK_constraint and self.material.oscillators.model != 'Drude':
+			# 		opt.add_equality_constraint(self.constraint_function_refind_henke)
+			# else:
+			# 	opt.add_equality_constraint(self.constraint_function)
+			# 	if self.material.use_KK_constraint and self.material.oscillators.model != 'Drude':
+			# 		opt.add_equality_constraint(self.constraint_function_refind)
 
 			x = opt.optimize(self.struct2Vec(self.material))
 			print(f"found minimum after {self.count} evaluations")
@@ -955,10 +954,12 @@ class OptFit:
 		self.count += 1;
 		material = self.vec2Struct(osc_vec)
 		material.calculateDIIMFP(self.E0, self.dE, self.n_q)
-		material.ELF = (-1/material._epsilon).imag[:,0]
 		diimfp_interp = np.interp(self.exp_data.x_ndiimfp, material.DIIMFP_E, material.DIIMFP)
-		elf_interp = np.interp(self.exp_data.x_elf, material.DIIMFP_E, material.ELF)
 
+		if material.oscillators.alpha == 0:
+			elf_interp = np.interp(self.exp_data.x_elf, material.eloss_extended_to_Henke, material.ELF_extended_to_Henke)
+		else:
+			elf_interp = np.interp(self.exp_data.x_elf, material.DIIMFP_E, material.ELF[:,0])
 		ind_ndiimfp = self.exp_data.y_ndiimfp >= 0
 		ind_elf = self.exp_data.y_elf >= 0
 
