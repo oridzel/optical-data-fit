@@ -842,7 +842,7 @@ class OptFit:
 			opt_local = nlopt.opt(nlopt.LN_COBYLA, len(self.struct2Vec(self.material)))
 			opt_local.set_maxeval(maxeval)
 			opt_local.set_xtol_rel(xtol_rel)
-			opt_local.set_ftol_rel = 1e-15;
+			opt_local.set_ftol_rel = 1e-20;
 
 			opt = nlopt.opt(nlopt.AUGLAG, len(self.struct2Vec(self.material)))
 			opt.set_local_optimizer(opt_local)
@@ -851,19 +851,19 @@ class OptFit:
 			opt.set_lower_bounds(self.lb)
 			opt.set_upper_bounds(self.ub)
 
-			if self.material.use_henke_for_ne:
-				if self.material.eloss_Henke is None and self.material.ELF_Henke is None:
-					self.material.eloss_Henke, self.material.ELF_Henke = self.material.mopt()
-				self.material.electron_density_Henke = self.material.atomic_density * self.material.Z * a0 ** 3 - \
-					1 / (2 * math.pi**2) * np.trapz(self.material.eloss_Henke / h2ev * self.material.ELF_Henke, self.material.eloss_Henke / h2ev)
-				print(f"Electron density = {self.material.electron_density_Henke / a0 ** 3}")
-				opt.add_equality_constraint(self.constraint_function_henke)
-				if self.material.use_KK_constraint and self.material.oscillators.model != 'Drude':
-					opt.add_equality_constraint(self.constraint_function_refind_henke)
-			else:
-				opt.add_equality_constraint(self.constraint_function)
-				if self.material.use_KK_constraint and self.material.oscillators.model != 'Drude':
-					opt.add_equality_constraint(self.constraint_function_refind)
+			# if self.material.use_henke_for_ne:
+			# 	if self.material.eloss_Henke is None and self.material.ELF_Henke is None:
+			# 		self.material.eloss_Henke, self.material.ELF_Henke = self.material.mopt()
+			# 	self.material.electron_density_Henke = self.material.atomic_density * self.material.Z * a0 ** 3 - \
+			# 		1 / (2 * math.pi**2) * np.trapz(self.material.eloss_Henke / h2ev * self.material.ELF_Henke, self.material.eloss_Henke / h2ev)
+			# 	print(f"Electron density = {self.material.electron_density_Henke / a0 ** 3}")
+			# 	opt.add_equality_constraint(self.constraint_function_henke)
+			# 	if self.material.use_KK_constraint and self.material.oscillators.model != 'Drude':
+			# 		opt.add_equality_constraint(self.constraint_function_refind_henke)
+			# else:
+			# 	opt.add_equality_constraint(self.constraint_function)
+			# 	if self.material.use_KK_constraint and self.material.oscillators.model != 'Drude':
+			# 		opt.add_equality_constraint(self.constraint_function_refind)
 
 			opt.set_maxeval(maxeval)
 			opt.set_xtol_rel(xtol_rel)
@@ -877,7 +877,7 @@ class OptFit:
 			opt = nlopt.opt(nlopt.LN_COBYLA, len(self.struct2Vec(self.material)))
 			opt.set_maxeval(maxeval)
 			opt.set_xtol_rel(xtol_rel)
-			opt.set_ftol_rel = 1e-15;
+			opt.set_ftol_rel = 1e-20;
 			opt.set_min_objective(self.objective_function)
 			self.setBounds()
 			opt.set_lower_bounds(self.lb)
