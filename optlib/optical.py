@@ -108,6 +108,7 @@ class Material:
 		self.oscillators = oscillators;
 		self.composition = composition
 		self.eloss = np.array(eloss)
+		self.eloss[eloss == 0] = 1e-5
 		self.xraypath = xraypath
 		self.Eg = 0
 		self.Ef = 0
@@ -196,8 +197,8 @@ class Material:
 			eps_real -= self.oscillators.A[i] * epsDrude_real
 			eps_imag += self.oscillators.A[i] * epsDrude_imag
 
-		# if self.Eg > 0:
-		# 	eps_imag[self.eloss <= self.Eg] = 0
+		if self.Eg > 0:
+			eps_imag[self.eloss <= self.Eg] = 1e-5
 		if self.use_kk_relation:
 			eps_real = self.kramers_kronig(eps_imag)
 
@@ -249,13 +250,6 @@ class Material:
 		self.convert2ru()
 		return epsilon
 
-	def calculateDLLOscillator(self, omega0, gamma):
-		omegaDL = np.sqrt(omega0**2 + self.U**2)
-		ratioInt = (omega0 / omegaDL)**2
-		z1 = ratioInt * self.calculateDLOscillator(omegaDL, gamma, 0.0) + (1.0 - ratioInt) * complex(1)
-		return complex(1) / z1
-
-
 	def calculateDLOscillator(self, omega0, gamma, alpha):
 		if not self.q_dependency is None:
 			w_at_q = omega0 - self.q_dependency(0)/h2ev + self.q_dependency(self.q / a0)/h2ev
@@ -269,11 +263,11 @@ class Material:
 
 		one_over_eps_imag = -omega0**2 * omega * gamma / divisor
 		if self.Eg > 0:
-			one_over_eps_imag[self.eloss <= self.Eg] = 0
-		# if self.use_kk_relation:
-		# 	one_over_eps_real = self.kramers_kronig(one_over_eps_imag)
-		# else:
-		one_over_eps_real = 1.0 + omega0**2 * mm / divisor
+			one_over_eps_imag[self.eloss <= self.Eg] = 1e-5
+		if self.use_kk_relation:
+			one_over_eps_real = self.kramers_kronig(one_over_eps_imag)
+		else:
+			one_over_eps_real = 1.0 + omega0**2 * mm / divisor
 
 		one_over_eps = np.squeeze(np.apply_along_axis(lambda args: [complex(
 			*args)], 0, np.array([one_over_eps_real, one_over_eps_imag])))
@@ -299,7 +293,7 @@ class Material:
 		oneovereps += complex(1) - complex(np.sum(self.oscillators.A))
 		
 		if self.Eg > 0:
-			oneovereps.imag[self.eloss <= self.Eg] = 0
+			oneovereps.imag[self.eloss <= self.Eg] = 1e-5
 
 		epsilon = complex(1) / oneovereps
 		if self.use_kk_relation:
@@ -569,12 +563,10 @@ class Material:
 			self.q = 0.01
 		self.extendToHenke()
 		div = self.ELF_extended_to_Henke / self.eloss_extended_to_Henke
-		div[np.isnan(div)] = machine_eps
-		if self.Eg == 0:
-			kksum = 2 / math.pi * np.trapz(div, self.eloss_extended_to_Henke)
-		else:
-			print(f'Insulator Eg = {self.Eg}')
-			kksum = 2 / math.pi * np.trapz(div, self.eloss_extended_to_Henke) + 1 / self.static_refractive_index**2
+		div[((div < 0) | (np.isnan(div)))] = 1e-5
+		kksum = 2 / math.pi * np.trapz(div, self.eloss_extended_to_Henke)
+		if self.Eg != 0:
+			kksum += 1 / self.static_refractive_index**2
 		self.q = old_q
 		return kksum
 
@@ -582,8 +574,7 @@ class Material:
 		self.calculateELF()
 		if self.eloss_Henke is None and self.ELF_Henke is None:
 			self.eloss_Henke, self.ELF_Henke = self.mopt()
-		# ind_henke = self.eloss_Henke > 100
-		ind = self.eloss <= 100
+		ind = self.eloss < 100
 		self.eloss_extended_to_Henke = np.concatenate((self.eloss[ind], self.eloss_Henke))
 		self.ELF_extended_to_Henke = np.concatenate((self.ELF[ind], self.ELF_Henke))
 
@@ -619,10 +610,8 @@ class Material:
 		return henke
 
 	def calculateELF(self):
-		# if self.epsilon is None or self.epsilon.shape[0] != self.eloss.shape[0]:
-		#     self.calculateDielectricFunction()
 		ELF = (-1/self.epsilon).imag
-		ELF[np.isnan(ELF)] = machine_eps
+		ELF[np.isnan(ELF)] = 1e-5
 		self.ELF = ELF
 
 	def calculateSurfaceELF(self):
@@ -883,19 +872,19 @@ class OptFit:
 			opt.set_lower_bounds(self.lb)
 			opt.set_upper_bounds(self.ub)
 
-			# if self.material.use_henke_for_ne:
-			# 	if self.material.eloss_Henke is None and self.material.ELF_Henke is None:
-			# 		self.material.eloss_Henke, self.material.ELF_Henke = self.material.mopt()
-			# 	self.material.electron_density_Henke = self.material.atomic_density * self.material.Z * a0 ** 3 - \
-			# 		1 / (2 * math.pi**2) * np.trapz(self.material.eloss_Henke / h2ev * self.material.ELF_Henke, self.material.eloss_Henke / h2ev)
-			# 	print(f"Electron density = {self.material.electron_density_Henke / a0 ** 3}")
-			# 	opt.add_equality_constraint(self.constraint_function_henke)
-			# 	if self.material.use_KK_constraint and self.material.oscillators.model != 'Drude':
-			# 		opt.add_equality_constraint(self.constraint_function_refind_henke)
-			# else:
-			# 	opt.add_equality_constraint(self.constraint_function)
-			# 	if self.material.use_KK_constraint and self.material.oscillators.model != 'Drude':
-			# 		opt.add_equality_constraint(self.constraint_function_refind)
+			if self.material.use_henke_for_ne:
+				if self.material.eloss_Henke is None and self.material.ELF_Henke is None:
+					self.material.eloss_Henke, self.material.ELF_Henke = self.material.mopt()
+				self.material.electron_density_Henke = self.material.atomic_density * self.material.Z * a0 ** 3 - \
+					1 / (2 * math.pi**2) * np.trapz(self.material.eloss_Henke / h2ev * self.material.ELF_Henke, self.material.eloss_Henke / h2ev)
+				print(f"Electron density = {self.material.electron_density_Henke / a0 ** 3}")
+				opt.add_equality_constraint(self.constraint_function_henke)
+				if self.material.use_KK_constraint and self.material.oscillators.model != 'Drude':
+					opt.add_equality_constraint(self.constraint_function_refind_henke)
+			else:
+				opt.add_equality_constraint(self.constraint_function)
+				if self.material.use_KK_constraint and self.material.oscillators.model != 'Drude':
+					opt.add_equality_constraint(self.constraint_function_refind)
 
 			x = opt.optimize(self.struct2Vec(self.material))
 			print(f"found minimum after {self.count} evaluations")
