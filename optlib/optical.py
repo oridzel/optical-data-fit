@@ -41,6 +41,16 @@ def is_list_of_int_float(lst):
 	else:
 		return True
 
+def conv(x1, x2, de, mode='right'):
+	n = x1.size
+	a = np.convolve(x1, x2)
+	if mode == 'right':
+		return a[0:n] * de
+	elif mode == 'left':
+		return a[a.size-n:a.size] * de
+	else:
+		return a * de
+
 
 class Error(Exception):
 	"""Base class for exceptions in this module."""
@@ -763,7 +773,19 @@ class Material:
 		plt.xscale('log')
 		plt.title(f'{self.name} {self.oscillators.model}')
 		# plt.legend()
-		plt.show()
+		plt.show()	
+
+	def calculateDiimfpConvolutions(self, n_in):
+		if self.DIIMFP is None:
+			raise Error("The diimfp has not been calculated yet.")
+		de = self.DIIMFP_E[2] - self.DIIMFP_E[1]
+		convolutions = np.zeros((self.DIIMFP.size, n_in+1))
+		convolutions[0, 0] = 1/de    
+		
+		for k in range(1, n_in+1):
+			convolutions[:,k] = conv(convolutions[:,k-1], self.DIIMFP, de)
+		
+		return convolutions
 
 	def writeOpticalData(self):
 		self.calculateELF()
@@ -872,19 +894,19 @@ class OptFit:
 			opt.set_lower_bounds(self.lb)
 			opt.set_upper_bounds(self.ub)
 
-			if self.material.use_henke_for_ne:
-				if self.material.eloss_Henke is None and self.material.ELF_Henke is None:
-					self.material.eloss_Henke, self.material.ELF_Henke = self.material.mopt()
-				self.material.electron_density_Henke = self.material.atomic_density * self.material.Z * a0 ** 3 - \
-					1 / (2 * math.pi**2) * np.trapz(self.material.eloss_Henke / h2ev * self.material.ELF_Henke, self.material.eloss_Henke / h2ev)
-				print(f"Electron density = {self.material.electron_density_Henke / a0 ** 3}")
-				opt.add_equality_constraint(self.constraint_function_henke)
-				if self.material.use_KK_constraint and self.material.oscillators.model != 'Drude':
-					opt.add_equality_constraint(self.constraint_function_refind_henke)
-			else:
-				opt.add_equality_constraint(self.constraint_function)
-				if self.material.use_KK_constraint and self.material.oscillators.model != 'Drude':
-					opt.add_equality_constraint(self.constraint_function_refind)
+			# if self.material.use_henke_for_ne:
+			# 	if self.material.eloss_Henke is None and self.material.ELF_Henke is None:
+			# 		self.material.eloss_Henke, self.material.ELF_Henke = self.material.mopt()
+			# 	self.material.electron_density_Henke = self.material.atomic_density * self.material.Z * a0 ** 3 - \
+			# 		1 / (2 * math.pi**2) * np.trapz(self.material.eloss_Henke / h2ev * self.material.ELF_Henke, self.material.eloss_Henke / h2ev)
+			# 	print(f"Electron density = {self.material.electron_density_Henke / a0 ** 3}")
+			# 	opt.add_equality_constraint(self.constraint_function_henke)
+			# 	if self.material.use_KK_constraint and self.material.oscillators.model != 'Drude':
+			# 		opt.add_equality_constraint(self.constraint_function_refind_henke)
+			# else:
+			# 	opt.add_equality_constraint(self.constraint_function)
+			# 	if self.material.use_KK_constraint and self.material.oscillators.model != 'Drude':
+			# 		opt.add_equality_constraint(self.constraint_function_refind)
 
 			x = opt.optimize(self.struct2Vec(self.material))
 			print(f"found minimum after {self.count} evaluations")
