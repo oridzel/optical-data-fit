@@ -1,13 +1,11 @@
 import numpy as np
 import math
 import matplotlib.pyplot as plt
-from typing import List
 import nlopt
 import copy
 import pandas as pd
-from scipy.integrate import quad
-from scipy.stats import chisquare
-from sympy.integrals.singularityfunctions import singularityintegrate
+import os
+from scipy import special, interpolate, sparse, stats
 
 hc = 12.3981756608  # planck constant times velocity of light keV Angstr
 r0 = 2.8179403227e-15
@@ -106,6 +104,13 @@ class Oscillators:
 		self.eps_b = eps_b;
 
 
+class ExperimentConfiguration:
+	def __init__(self, theta0 = 0, theta = 0, phi = 0):
+		self.theta0 = theta0
+		self.theta = theta
+		self.phi = phi
+
+
 class Material:
 	'''Here will be some description of the class Material'''
 
@@ -136,9 +141,13 @@ class Material:
 		# self.epsilon = None
 		self.DIIMFP = None
 		self.DIIMFP_E = None
+		self.DECS = None
+		self.DECS_mu = None
 		self.E0 = None
 		self.IMFP = None
 		self.IMFP_E = None
+		self.EMFP = None
+		self.sigma_el = None
 		self.q_dependency = None
 		self._q = q
 		self.use_KK_constraint = False
@@ -773,7 +782,153 @@ class Material:
 		plt.xscale('log')
 		plt.title(f'{self.name} {self.oscillators.model}')
 		# plt.legend()
-		plt.show()	
+		plt.show()
+
+	def get_sigma(self, lines, line, pattern):
+		start = lines[line].find(pattern) + len(pattern)
+		end = lines[line].find(' cm**2')
+		return float(lines[line][start:end])*1e16
+
+	def calculateElasticProperties(self, E0):
+		self.E0 = E0
+		fd = open('lub.in','w+')
+
+		fd.write(f'IZ      {self.Z}         atomic number                               [none]\n')
+		fd.write('MNUCL   3          rho_n (1=P, 2=U, 3=F, 4=Uu)                  [  3]\n')
+		fd.write(f'NELEC   {self.Z}         number of bound electrons                    [ IZ]\n')
+		fd.write('MELEC   3          rho_e (1=TFM, 2=TFD, 3=DHFS, 4=DF, 5=file)   [  4]\n')
+		fd.write('MUFFIN  0          0=free atom, 1=muffin-tin model              [  0]\n')
+		fd.write('RMUF    0          muffin-tin radius (cm)                  [measured]\n')
+		fd.write('IELEC  -1          -1=electron, +1=positron                     [ -1]\n')
+		fd.write('MEXCH   1          V_ex (0=none, 1=FM, 2=TF, 3=RT)              [  1]\n')
+		fd.write('MCPOL   2          V_cp (0=none, 1=B, 2=LDA)                    [  0]\n')
+		fd.write('VPOLA  -1          atomic polarizability (cm^3)            [measured]\n')
+		fd.write('VPOLB  -1          b_pol parameter                          [default]\n')
+		fd.write('MABS    1          W_abs (0=none, 1=LDA-I, 2=LDA-II)            [  0]\n')
+		fd.write('VABSA   2.0        absorption-potential strength, Aabs      [default]\n')
+		fd.write('VABSD  -1.0        energy gap DELTA (eV)                    [default]\n')
+		fd.write('IHEF    2          high-E factorization (0=no, 1=yes, 2=Born)   [  1]\n')
+		fd.write(f'EV      {self.E0}     kinetic energy (eV)                         [none]\n')
+
+		fd.close()
+
+		# os.system('/Users/olgaridzel/Research/ESCal/src/MaterialDatabase/Data/Elsepa/elsepa-2020/elsepa-2020 < lub.in')
+
+		with open('dcs_' + '{:1.3e}'.format(self.E0).replace('.','p').replace('+0','0') + '.dat','r') as fd:
+			self.sigma_el = self.get_sigma(fd.readlines(), 32, 'Total elastic cross section = ')
+			self.EMFP = 1/(self.sigma_el*self.atomic_density)
+			# sigma_tr_1 = get_sigma(lines, 33, '1st transport cross section = ')
+			# sigma_tr_2 = get_sigma(lines, 34, '2nd transport cross section = ')
+		
+		data = np.loadtxt('dcs_' + '{:1.3e}'.format(self.E0).replace('.','p').replace('+0','0') + '.dat', skiprows=44)
+		self.DECS_deg = data[:,0]
+		self.DECS_mu = data[:,1]
+		self.DECS = data[:,2]
+		self.NDECS = self.DECS / np.trapz(self.DECS, self.DECS_mu)
+
+		self.calculateIMFP(np.array([E0]))
+		imfp = self.IMFP[0]
+		self.TMFP = 1 / (1/imfp + 1/self.EMFP)
+		self.albedo = self.TMFP / self.EMFP
+
+	def Legendre_mu(self,mu,m,L):
+		smu = np.sqrt(1 - mu**2)
+
+		N = mu.shape[0]
+		m2 = m**2
+		P = np.ones((L - m, N))
+		if m > 0:
+			im2 = linspace(2, 2*m, 2)
+			sim2 = np.sqrt(np.prod(1 - 1 / im2))
+			P[0,:] = sim2 * smu ** m
+
+		sim1 = np.sqrt(2*m + 1)
+		P[1,:] = sim1 * mu * P[0,:]
+
+		for k in range(m + 2, L):
+			i = k - m
+			iskm = 1 / np.sqrt(k**2 - m2)
+			k1 = (2*k - 1)*iskm
+			k2 = np.sqrt((k-1)**2 - m2)*iskm
+			P[i,:] = k1* mu * P[i-1,:] - k2*P[i-2,:]
+		return P
+
+	def calculateAngularMesh(self, N):
+		[x, s] = special.roots_legendre(N-1)
+		x = (np.concatenate((x, np.array([1]))) + 1) / 2
+		self.mu_mesh = x[::-1]
+		
+	def calculateLegendreCoefficients(self, NLeg=100):
+		N = max(2000, math.floor(NLeg*5))
+		self.xl = np.zeros(NLeg+1)
+		mu = np.cos(np.deg2rad(self.DECS_deg))
+		[x,s] = special.roots_legendre(N)
+		decs = np.interp(x, mu[::-1], self.DECS[::-1])
+		decs /= np.trapz(decs, x)
+
+		for l in range(NLeg+1):
+			self.xl[l] = np.trapz(decs * special.lpmv(0, l, x), x)
+		# self.xl = np.loadtxt('xl')
+
+	def calculate(self, E0=1000, n_in=10, NLeg=100, mu_i=1, mu_o=0.5, phi=0):
+		# N = max(2000, math.floor(NLeg*5))
+		N = NLeg
+		# if not self.E0 or self.E0 != E0:
+		self.calculateElasticProperties(E0)
+		self.calculateLegendreCoefficients(N)
+
+		psi = np.rad2deg(math.acos(mu_i*mu_o + math.sqrt(1 - mu_i**2)*math.sqrt(1 - mu_o**2)*math.cos(np.deg2rad(phi))))
+		print(psi)
+		M = math.floor(0.41*psi - 6e-3*psi**2 + 1.75e-10*psi**6 + 0.8)
+		print(M)
+		M = 1
+		norm = 1/2/math.pi
+		self.calculateAngularMesh(81)
+
+		mm = 1/self.mu_mesh + 1/self.mu_mesh.reshape((-1,1))
+		B = norm/mm
+		
+		norm_leg = (2*linspace(0,N,1) + 1)/2
+		self.R_l = np.zeros((self.mu_mesh.shape[0], self.mu_mesh.shape[0], n_in, N+1))
+
+		for l in range(N+1):
+			self.R_l[:,:,0,l] = -np.log(1 - self.albedo * self.xl[l]) * B
+			for k in range(1,n_in):
+				self.R_l[:,:,k,l] = (1 - self.albedo)**k / k * (1/(1 - self.albedo * self.xl[l])**k - 1) * B
+				
+		self.R_m = np.zeros((self.mu_mesh.shape[0], self.mu_mesh.shape[0], n_in, M))
+		for m in range(M):
+			for l in range(N+1):
+				P = special.lpmv(m, l, self.mu_mesh)
+				PlP = P * norm_leg[l+m] * P.reshape((-1,1))
+				for k in range(n_in):
+					self.R_m[:,:,k,m] += (-1)**(l + m) * self.R_l[:,:,k,l] * PlP
+
+		self.R_m[np.isnan(self.R_m)] = 0
+		self.R_m[np.isinf(self.R_m)] = 0
+		self.calculateAngularDistribution(mu_i, n_in)
+		self.calculatePartialIntensities(mu_o, n_in)
+
+	def calculateAngularDistribution(self, mu_i, n_in):
+		self.angular_distribution = np.zeros((self.mu_mesh.shape[0], n_in))
+		ind = self.mu_mesh == mu_i
+
+		for k in range(n_in):
+			if any(ind):
+				self.angular_distribution[:, k] = self.R_m[ind,:,k,0]*2*math.pi
+			else:
+				f = interpolate.interp1d(self.mu_mesh, self.R_m[:,:,k,0])
+				self.angular_distribution[:, k] = f(mu_i)*2*math.pi
+
+	def calculatePartialIntensities(self, mu_o, n_in):
+		self.partial_intensities = np.zeros(n_in)
+		ind = self.mu_mesh == mu_o
+
+		for k in range(n_in):
+			if any(ind):
+				self.partial_intensities[k] = self.angular_distribution[ind,k]
+			else:
+				self.partial_intensities[k] = np.interp(mu_o, self.mu_mesh, self.angular_distribution[:,k])
 
 	def calculateDiimfpConvolutions(self, n_in):
 		if self.DIIMFP is None:
@@ -786,6 +941,17 @@ class Material:
 			convolutions[:,k] = conv(convolutions[:,k-1], self.DIIMFP, de)
 		
 		return convolutions
+
+	def calculateEnergyDistribution(self, E0, n_in):
+		self.calculateDIIMFP(E0, decdigs=13)
+		convs = self.calculateDiimfpConvolutions(n_in-1)
+		energy_distribution = np.sum(convs*np.squeeze(self.partial_intensities),axis=1)
+
+		extra = np.linspace(-10,-0.5)
+		self.spectrum_E = np.concatenate((extra, self.DIIMFP_E))
+		full_dist = np.concatenate((np.zeros_like(extra), energy_distribution))
+		gauss = stats.norm.pdf(np.linspace(-10,10), 0, 1)
+		self.spectrum = np.convolve(full_dist, gauss, 'same')
 
 	def writeOpticalData(self):
 		self.calculateELF()
