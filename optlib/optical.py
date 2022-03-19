@@ -812,7 +812,7 @@ class Material:
 
 		fd.close()
 
-		# os.system('/Users/olgaridzel/Research/ESCal/src/MaterialDatabase/Data/Elsepa/elsepa-2020/elsepa-2020 < lub.in')
+		os.system('/Users/olgaridzel/Research/ESCal/src/MaterialDatabase/Data/Elsepa/elsepa-2020/elsepa-2020 < lub.in')
 
 		with open('dcs_' + '{:1.3e}'.format(self.E0).replace('.','p').replace('+0','0') + '.dat','r') as fd:
 			self.sigma_el = self.get_sigma(fd.readlines(), 32, 'Total elastic cross section = ')
@@ -1055,7 +1055,12 @@ class OptFit:
 			opt.set_maxeval(maxeval)
 			opt.set_xtol_rel(xtol_rel)
 			opt.set_ftol_rel = 1e-20;
-			opt.set_min_objective(self.objective_function)
+			if diimfp_coef == 0:
+				opt.set_min_objective(self.objective_function_elf)
+			elif elf_coef == 0:
+				opt.set_min_objective(self.objective_function_ndiimfp)
+			else:
+				opt.set_min_objective(self.objective_function)
 			self.setBounds()
 			opt.set_lower_bounds(self.lb)
 			opt.set_upper_bounds(self.ub)
@@ -1108,20 +1113,22 @@ class OptFit:
 		return material
 
 	def objective_function_ndiimfp(self, osc_vec, grad):
+		self.count += 1;
 		material = self.vec2Struct(osc_vec)
 		material.calculateDIIMFP(self.E0, self.dE, self.n_q)
 		diimfp_interp = np.interp(self.exp_data.x_ndiimfp, material.DIIMFP_E, material.DIIMFP)
-		chi_squared = np.sum((self.exp_data.y_ndiimfp - diimfp_interp)**2)
+		chi_squared = np.sum((self.exp_data.y_ndiimfp - diimfp_interp)**2 / self.exp_data.x_ndiimfp.size)
 
 		if grad.size > 0:
 			grad = np.array([0, 0.5/chi_squared])
 		return chi_squared
 
 	def objective_function_elf(self, osc_vec, grad):
+		self.count += 1;
 		material = self.vec2Struct(osc_vec)
 		material.calculateELF()
 		elf_interp = np.interp(self.exp_data.x_elf, material.eloss, material.ELF)
-		chi_squared = np.sum((self.exp_data.y_elf - elf_interp)**2)
+		chi_squared = np.sum((self.exp_data.y_elf - elf_interp)**2 / self.exp_data.x_elf.size)
 
 		if grad.size > 0:
 			grad = np.array([0, 0.5/chi_squared])
