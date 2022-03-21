@@ -5,7 +5,7 @@ import nlopt
 import copy
 import pandas as pd
 import os
-from scipy import special, interpolate, sparse, stats
+from scipy import special, interpolate, sparse, stats, optimize
 
 hc = 12.3981756608  # planck constant times velocity of light keV Angstr
 r0 = 2.8179403227e-15
@@ -52,6 +52,9 @@ def conv(x1, x2, de, mode='right'):
 		return a[a.size-n:a.size] * de
 	else:
 		return a * de
+
+def gauss(x, a1, b1, c1):
+    return a1*np.exp(-((x-b1)/c1)**2)
 
 
 class Error(Exception):
@@ -850,11 +853,6 @@ class Material:
 		self.DECS = data[:,2]
 		self.NDECS = self.DECS / np.trapz(self.DECS, self.DECS_mu)
 
-		self.calculateIMFP(np.array([E0]))
-		imfp = self.IMFP[0]
-		self.TMFP = 1 / (1/imfp + 1/self.EMFP)
-		self.albedo = self.TMFP / self.EMFP
-
 	def Legendre_mu(self,mu,m,L):
 		smu = np.sqrt(1 - mu**2)
 
@@ -900,8 +898,13 @@ class Material:
 		self.mu_i = mu_i
 		self.mu_o = mu_o
 		# if not self.E0 or self.E0 != E0:
-		self.calculateElasticProperties(E0)
-		self.calculateLegendreCoefficients(N)
+		# self.calculateElasticProperties(E0)
+		# self.calculateLegendreCoefficients(N)
+
+		self.calculateIMFP(np.array([E0]))
+		imfp = self.IMFP[0]
+		self.TMFP = 1 / (1/imfp + 1/self.EMFP)
+		self.albedo = self.TMFP / self.EMFP
 
 		psi = np.rad2deg(math.acos(mu_i*mu_o + math.sqrt(1 - mu_i**2)*math.sqrt(1 - mu_o**2)*math.cos(np.deg2rad(phi))))
 		print(psi)
@@ -992,7 +995,14 @@ class Material:
 		
 		return convolutions
 
-	def calculateEnergyDistribution(self, E0, n_in, sigma_gauss, dE=0.5):
+	def fitElasticPeak(self, x_exp, y_exp):
+		ind = np.logical_and(x_exp > x_exp[np.argmax(y_exp)] - 3, x_exp < x_exp[np.argmax(y_exp)] + 3)
+		x = x_exp[ind]
+		y = y_exp[ind]
+		popt, pcov = optimize.curve_fit(gauss, x, y, [np.max(y), x[np.argmax(y)], 1])
+		return popt
+
+	def calculateEnergyDistribution(self, E0, n_in, x_exp, y_exp, dE=0.5):
 		self.calculateDIIMFP(E0, dE, decdigs=13)
 		convs = self.calculateDiimfpConvolutions(n_in-1)
 		self.energy_distribution = np.sum(convs*np.squeeze(self.partial_intensities / self.partial_intensities[0]),axis=1)
@@ -1002,11 +1012,10 @@ class Material:
 
 		extra = np.linspace(-10,-dE, round(10/dE))
 		self.spectrum_E = np.concatenate((extra, self.DIIMFP_E))
-		full_dist = np.concatenate((np.zeros_like(extra), conv(self.energy_distribution, self.energy_distribution_s, dE) ))
-		# full_dist = np.concatenate((np.zeros_like(extra), self.energy_distribution))
-		# full_dist_s = np.concatenate((np.zeros_like(extra), self.energy_distribution_s))
-		gauss = stats.norm.pdf(np.linspace(-10,10), 0, sigma_gauss)
-		self.spectrum = conv(full_dist, gauss, dE)
+		full_dist = np.concatenate((np.zeros_like(extra), conv(self.energy_distribution, self.energy_distribution_s, dE) ))		
+		coefs = self.fitElasticPeak(x_exp, y_exp)
+		gaussian = gauss(linspace(-10,10,dE), coefs[0], 0, coefs[2])
+		self.spectrum = conv(full_dist, gaussian, dE)
 
 	def writeOpticalData(self):
 		self.calculateELF()
@@ -1141,6 +1150,83 @@ class OptFit:
 
 		return x
 
+	def runOptimisationSpec(self, mu_i, mu_o, n_in, maxeval = 1000, xtol_rel = 1e-6, isGlobal = False):
+		print('Starting spec optimisation...')
+		self.count = 0
+		self.mu_i = mu_i
+		self.mu_o = mu_o
+		self.n_in = n_in
+
+		if isGlobal:
+			opt_local = nlopt.opt(nlopt.LN_COBYLA, len(self.struct2Vec(self.material)))
+			opt_local.set_maxeval(maxeval)
+			opt_local.set_xtol_rel(xtol_rel)
+			opt_local.set_ftol_rel = 1e-20;
+
+			opt = nlopt.opt(nlopt.AUGLAG, len(self.struct2Vec(self.material)))
+			opt.set_local_optimizer(opt_local)
+			opt.set_min_objective(self.objective_function_spec)
+			self.setBounds()
+			opt.set_lower_bounds(self.lb)
+			opt.set_upper_bounds(self.ub)
+
+			# if self.material.use_henke_for_ne:
+			# 	if self.material.eloss_Henke is None and self.material.ELF_Henke is None:
+			# 		self.material.eloss_Henke, self.material.ELF_Henke = self.material.mopt()
+			# 	self.material.electron_density_Henke = self.material.atomic_density * self.material.Z * a0 ** 3 - \
+			# 		1 / (2 * math.pi**2) * np.trapz(self.material.eloss_Henke / h2ev * self.material.ELF_Henke, self.material.eloss_Henke / h2ev)
+			# 	print(f"Electron density = {self.material.electron_density_Henke / a0 ** 3}")
+			# 	opt.add_equality_constraint(self.constraint_function_henke)
+			# 	if self.material.use_KK_constraint and self.material.oscillators.model != 'Drude':
+			# 		opt.add_equality_constraint(self.constraint_function_refind_henke)
+			# else:
+			# 	opt.add_equality_constraint(self.constraint_function)
+			# 	if self.material.use_KK_constraint and self.material.oscillators.model != 'Drude':
+			# 		opt.add_equality_constraint(self.constraint_function_refind)
+
+			opt.set_maxeval(maxeval)
+			opt.set_xtol_rel(xtol_rel)
+
+			self.material.calculateElasticProperties(self.E0)
+			self.material.calculateLegendreCoefficients(200)
+			x = opt.optimize(self.struct2Vec(self.material))
+			print(f"found minimum after {self.count} evaluations")
+			print("minimum value = ", opt.last_optimum_value())
+			print("result code = ", opt.last_optimize_result())
+
+		else:
+			opt = nlopt.opt(nlopt.LN_COBYLA, len(self.struct2Vec(self.material)))
+			opt.set_maxeval(maxeval)
+			opt.set_xtol_rel(xtol_rel)
+			opt.set_ftol_rel = 1e-20
+			opt.set_min_objective(self.objective_function_spec)
+			self.setBounds()
+			opt.set_lower_bounds(self.lb)
+			opt.set_upper_bounds(self.ub)
+
+			# if self.material.use_henke_for_ne:
+			# 	if self.material.eloss_Henke is None and self.material.ELF_Henke is None:
+			# 		self.material.eloss_Henke, self.material.ELF_Henke = self.material.mopt()
+			# 	self.material.electron_density_Henke = self.material.atomic_density * self.material.Z * a0 ** 3 - \
+			# 		1 / (2 * math.pi**2) * np.trapz(self.material.eloss_Henke / h2ev * self.material.ELF_Henke, self.material.eloss_Henke / h2ev)
+			# 	print(f"Electron density = {self.material.electron_density_Henke / a0 ** 3}")
+			# 	opt.add_equality_constraint(self.constraint_function_henke)
+			# 	if self.material.use_KK_constraint and self.material.oscillators.model != 'Drude':
+			# 		opt.add_equality_constraint(self.constraint_function_refind_henke)
+			# else:
+			# 	opt.add_equality_constraint(self.constraint_function)
+			# 	if self.material.use_KK_constraint and self.material.oscillators.model != 'Drude':
+			# 		opt.add_equality_constraint(self.constraint_function_refind)
+
+			self.material.calculateElasticProperties(self.E0)
+			self.material.calculateLegendreCoefficients(200)
+			x = opt.optimize(self.struct2Vec(self.material))
+			print(f"found minimum after {self.count} evaluations")
+			print("minimum value = ", opt.last_optimum_value())
+			print("result code = ", opt.last_optimize_result())
+
+		return x
+
 	def struct2Vec(self, osc_struct):
 		if osc_struct.oscillators.model == 'MerminLL' or osc_struct.oscillators.model == 'DLL':
 			vec = np.append( np.hstack((osc_struct.oscillators.A,osc_struct.oscillators.gamma,osc_struct.oscillators.omega)), osc_struct.U )
@@ -1167,8 +1253,24 @@ class OptFit:
 			
 		return material
 
+	def objective_function_spec(self, osc_vec, grad):
+		self.count += 1
+		ind = np.logical_and(self.exp_data.x_spec > self.exp_data.x_spec[np.argmax(self.exp_data.y_spec)] - 3, self.exp_data.x_spec < self.exp_data.x_spec[np.argmax(self.exp_data.y_spec)] + 3)
+		x = self.exp_data.x_spec[ind]
+		y = self.exp_data.y_spec[ind]
+		exp_area = np.trapz(y, x)
+		material = self.vec2Struct(osc_vec)
+		material.calculate(self.E0, self.n_in, 200, self.mu_i, self.mu_o)
+		material.calculateEnergyDistribution(self.E0, self.n_in, self.exp_data.x_spec, self.exp_data.y_spec, 0.1)
+		spec_interp = np.interp(self.E0 - self.exp_data.x_spec, material.spectrum_E - material.spectrum_E[np.argmax(material.spectrum)], material.spectrum)
+		chi_squared = np.sum((self.exp_data.y_spec / exp_area - spec_interp / exp_area)**2 / self.exp_data.x_spec.size)
+
+		if grad.size > 0:
+			grad = np.array([0, 0.5/chi_squared])
+		return chi_squared
+
 	def objective_function_ndiimfp(self, osc_vec, grad):
-		self.count += 1;
+		self.count += 1
 		material = self.vec2Struct(osc_vec)
 		material.calculateDIIMFP(self.E0, self.dE, self.n_q)
 		diimfp_interp = np.interp(self.exp_data.x_ndiimfp, material.DIIMFP_E, material.DIIMFP)
@@ -1179,7 +1281,7 @@ class OptFit:
 		return chi_squared
 
 	def objective_function_elf(self, osc_vec, grad):
-		self.count += 1;
+		self.count += 1
 		material = self.vec2Struct(osc_vec)
 		material.calculateELF()
 		elf_interp = np.interp(self.exp_data.x_elf, material.eloss, material.ELF)
@@ -1190,7 +1292,7 @@ class OptFit:
 		return chi_squared
 
 	def objective_function(self, osc_vec, grad):
-		self.count += 1;
+		self.count += 1
 		material = self.vec2Struct(osc_vec)
 		material.calculateDIIMFP(self.E0, self.dE, self.n_q)
 		diimfp_interp = np.interp(self.exp_data.x_ndiimfp, material.DIIMFP_E, material.DIIMFP)
