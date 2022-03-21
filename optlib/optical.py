@@ -16,6 +16,10 @@ wpc = 4*math.pi * a0**3
 N_Avogadro = 6.02217e23
 c = 137.036
 
+def wavelength2energy(wavelength):
+	# wavelength in Angstroem
+    return hc / wavelength  * 1e3
+
 
 def linspace(start, stop, step=1.):
 	num = int((stop - start) / step + 1)
@@ -643,6 +647,16 @@ class Material:
 		enu += 2*eps_2*(eps_1 - 1)*(eps_1*(eps_1 + 1) - eps_2**2)
 		self.surfaceELF = enu/den
 
+	def calculateDSEP(self, E0):
+		self.calculateDielectricFunction()
+		epsfraction = (self.epsilon - 1)**2 / (self.epsilon*(self.epsilon + 1))
+		qs1 = np.sqrt(np.abs(self.q**2 - (self.eloss.reshape((-1,1)) + 0.5*self.q**2)**2 / (2.0 * E0)))  
+		result = 2.0*epsfraction.imag *qs1 / self.q**3
+		result[np.isinf(result)] = 0
+		result[0,:] = 0
+		self.surfaceELF = epsfraction.imag
+		return result / (math.pi*E0)
+
 	def calculateOpticalConstants(self):
 		if self.epsilon is None or self.epsilon.shape[0] != self.eloss.shape[0]:
 			self.calculateDielectricFunction()
@@ -724,21 +738,31 @@ class Material:
 			if (self.oscillators.model == 'Mermin' or self.oscillators.model == 'MerminLL'):
 				q[q == 0] = 0.01
 			self.q = q / a0
+
+			# self.calculateSurfaceELF()
+			# integrand_s = self.surfaceELF / q
+			integrand_s = self.calculateDSEP(E0/h2ev)
 			self.calculateELF()
 			integrand = self.ELF / q
 			integrand[q == 0] = 0
 			if (self.oscillators.model == 'Mermin' or self.oscillators.model == 'MerminLL'):
 				integrand[q == 0.01] = 0
 			diimfp = rel_coef * 1/(math.pi * (E0/h2ev)) * np.trapz( integrand, q, axis = 1 ) * (1/h2ev/a0)
+			dsep = rel_coef * np.trapz( integrand_s, q, axis = 1 ) / h2ev
 
-		diimfp[np.isnan(diimfp)] = machine_eps
+		diimfp[np.isnan(diimfp)] = 1e-5
+		dsep[np.isnan(diimfp)] = 1e-5
 		self.eloss = old_eloss
 		self.q = old_q
+		self.sep = np.trapz(dsep, eloss)
 
 		if normalised:
 			diimfp = diimfp / np.trapz(diimfp, eloss)
+			dsep = dsep / np.trapz(dsep, eloss)
+		
 		self.DIIMFP = diimfp
 		self.DIIMFP_E = eloss
+		self.DSEP = dsep
 		self.E0 = old_E0
 
 	def plotDIIMFP(self, E0, decdigs = 10, normalised = True, savefig = False, filename = None):
@@ -873,6 +897,8 @@ class Material:
 	def calculate(self, E0=1000, n_in=10, NLeg=100, mu_i=1, mu_o=0.5, phi=0):
 		# N = max(2000, math.floor(NLeg*5))
 		N = NLeg
+		self.mu_i = mu_i
+		self.mu_o = mu_o
 		# if not self.E0 or self.E0 != E0:
 		self.calculateElasticProperties(E0)
 		self.calculateLegendreCoefficients(N)
@@ -942,16 +968,45 @@ class Material:
 		
 		return convolutions
 
-	def calculateEnergyDistribution(self, E0, n_in):
-		self.calculateDIIMFP(E0, decdigs=13)
-		convs = self.calculateDiimfpConvolutions(n_in-1)
-		energy_distribution = np.sum(convs*np.squeeze(self.partial_intensities),axis=1)
+	def calculateDiimfpConvolutions(self, n_in):
+		if self.DIIMFP is None:
+			raise Error("The diimfp has not been calculated yet.")
+		de = self.DIIMFP_E[2] - self.DIIMFP_E[1]
+		convolutions = np.zeros((self.DIIMFP.size, n_in+1))
+		convolutions[0, 0] = 1/de    
+		
+		for k in range(1, n_in+1):
+			convolutions[:,k] = conv(convolutions[:,k-1], self.DIIMFP, de)
+		
+		return convolutions
 
-		extra = np.linspace(-10,-0.5)
+	def calculateDsepConvolutions(self, n_in):
+		if self.DSEP is None:
+			raise Error("The diimfp has not been calculated yet.")
+		de = self.DIIMFP_E[2] - self.DIIMFP_E[1]
+		convolutions = np.zeros((self.DSEP.size, n_in+1))
+		convolutions[0, 0] = 1/de    
+		
+		for k in range(1, n_in+1):
+			convolutions[:,k] = conv(convolutions[:,k-1], self.DSEP, de)
+		
+		return convolutions
+
+	def calculateEnergyDistribution(self, E0, n_in, sigma_gauss, dE=0.5):
+		self.calculateDIIMFP(E0, dE, decdigs=13)
+		convs = self.calculateDiimfpConvolutions(n_in-1)
+		self.energy_distribution = np.sum(convs*np.squeeze(self.partial_intensities / self.partial_intensities[0]),axis=1)
+		convs_s = self.calculateDsepConvolutions(3)
+		self.partial_intensities_s = stats.poisson(1/(np.sqrt(E0)*self.mu_i + 1) + 1/(np.sqrt(E0)*self.mu_o + 1)).pmf(np.array([0,1,2,3]))
+		self.energy_distribution_s = np.sum(convs_s*np.squeeze(self.partial_intensities_s),axis=1)
+
+		extra = np.linspace(-10,-dE, round(10/dE))
 		self.spectrum_E = np.concatenate((extra, self.DIIMFP_E))
-		full_dist = np.concatenate((np.zeros_like(extra), energy_distribution))
-		gauss = stats.norm.pdf(np.linspace(-10,10), 0, 1)
-		self.spectrum = np.convolve(full_dist, gauss, 'same')
+		full_dist = np.concatenate((np.zeros_like(extra), conv(self.energy_distribution, self.energy_distribution_s, dE) ))
+		# full_dist = np.concatenate((np.zeros_like(extra), self.energy_distribution))
+		# full_dist_s = np.concatenate((np.zeros_like(extra), self.energy_distribution_s))
+		gauss = stats.norm.pdf(np.linspace(-10,10), 0, sigma_gauss)
+		self.spectrum = conv(full_dist, gauss, dE)
 
 	def writeOpticalData(self):
 		self.calculateELF()
