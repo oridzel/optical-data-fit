@@ -6,6 +6,8 @@ import copy
 import pandas as pd
 import os
 from scipy import special, interpolate, sparse, stats, optimize
+import time
+from tqdm import tqdm
 
 hc = 12.3981756608  # planck constant times velocity of light keV Angstr
 r0 = 2.8179403227e-15
@@ -906,10 +908,10 @@ class Material:
 		self.TMFP = 1 / (1/imfp + 1/self.EMFP)
 		self.albedo = self.TMFP / self.EMFP
 
-		psi = np.rad2deg(math.acos(mu_i*mu_o + math.sqrt(1 - mu_i**2)*math.sqrt(1 - mu_o**2)*math.cos(np.deg2rad(phi))))
-		print(psi)
-		M = math.floor(0.41*psi - 6e-3*psi**2 + 1.75e-10*psi**6 + 0.8)
-		print(M)
+		# psi = np.rad2deg(math.acos(mu_i*mu_o + math.sqrt(1 - mu_i**2)*math.sqrt(1 - mu_o**2)*math.cos(np.deg2rad(phi))))
+		# print(psi)
+		# M = math.floor(0.41*psi - 6e-3*psi**2 + 1.75e-10*psi**6 + 0.8)
+		# print(M)
 		M = 1
 		norm = 1/2/math.pi
 		self.calculateAngularMesh(81)
@@ -1152,6 +1154,7 @@ class OptFit:
 
 	def runOptimisationSpec(self, mu_i, mu_o, n_in, maxeval = 1000, xtol_rel = 1e-6, isGlobal = False):
 		print('Starting spec optimisation...')
+		self.bar = tqdm(total=maxeval)
 		self.count = 0
 		self.mu_i = mu_i
 		self.mu_o = mu_o
@@ -1221,6 +1224,7 @@ class OptFit:
 			self.material.calculateElasticProperties(self.E0)
 			self.material.calculateLegendreCoefficients(200)
 			x = opt.optimize(self.struct2Vec(self.material))
+			self.bar.close()
 			print(f"found minimum after {self.count} evaluations")
 			print("minimum value = ", opt.last_optimum_value())
 			print("result code = ", opt.last_optimize_result())
@@ -1267,6 +1271,9 @@ class OptFit:
 
 		if grad.size > 0:
 			grad = np.array([0, 0.5/chi_squared])
+
+		self.bar.update(1)
+		time.sleep(1)
 		return chi_squared
 
 	def objective_function_ndiimfp(self, osc_vec, grad):
