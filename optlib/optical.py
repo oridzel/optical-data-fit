@@ -1,3 +1,4 @@
+import subprocess
 import numpy as np
 import math
 import matplotlib.pyplot as plt
@@ -841,7 +842,8 @@ class Material:
 
 		fd.close()
 
-		os.system('/Users/olgaridzel/Research/ESCal/src/MaterialDatabase/Data/Elsepa/elsepa-2020/elsepa-2020 < lub.in')
+		# output = os.system('/Users/olgaridzel/Research/ESCal/src/MaterialDatabase/Data/Elsepa/elsepa-2020/elsepa-2020 < lub.in')
+		x = subprocess.run('/Users/olgaridzel/Research/ESCal/src/MaterialDatabase/Data/Elsepa/elsepa-2020/elsepa-2020 < lub.in',shell=True,capture_output=True)
 
 		with open('dcs_' + '{:1.3e}'.format(self.E0).replace('.','p').replace('+0','0') + '.dat','r') as fd:
 			self.sigma_el = self.get_sigma(fd.readlines(), 32, 'Total elastic cross section = ')

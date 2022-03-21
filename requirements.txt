@@ -6,3 +6,4 @@ nlopt
 ipython
 setuptools
 tqdm
+ipywidgets
