@@ -1006,8 +1006,8 @@ class Material:
 		popt, pcov = optimize.curve_fit(gauss, x, y, [np.max(y), x[np.argmax(y)], 1])
 		return popt
 
-	def calculateEnergyDistribution(self, E0, n_in, x_exp, y_exp, dE=0.5):
-		self.calculateDIIMFP(E0, dE, decdigs=13)
+	def calculateEnergyDistribution(self, E0, n_in, x_exp, y_exp, dE=0.5, n_q=10):
+		self.calculateDIIMFP(E0, dE, decdigs=n_q)
 		convs = self.calculateDiimfpConvolutions(n_in-1)
 		self.energy_distribution = np.sum(convs*np.squeeze(self.partial_intensities / self.partial_intensities[0]),axis=1)
 		convs_s = self.calculateDsepConvolutions(3)
@@ -1267,7 +1267,7 @@ class OptFit:
 		exp_area = np.trapz(y, x)
 		material = self.vec2Struct(osc_vec)
 		material.calculate(self.E0, self.n_in, 200, self.mu_i, self.mu_o)
-		material.calculateEnergyDistribution(self.E0, self.n_in, self.exp_data.x_spec, self.exp_data.y_spec, 0.1)
+		material.calculateEnergyDistribution(self.E0, self.n_in, self.exp_data.x_spec, self.exp_data.y_spec, 0.1, self.n_q)
 		spec_interp = np.interp(self.E0 - self.exp_data.x_spec, material.spectrum_E - material.spectrum_E[np.argmax(material.spectrum)], material.spectrum)
 		chi_squared = np.sum((self.exp_data.y_spec / exp_area - spec_interp / exp_area)**2 / self.exp_data.x_spec.size)
 
