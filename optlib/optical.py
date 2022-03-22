@@ -59,6 +59,14 @@ def conv(x1, x2, de, mode='right'):
 def gauss(x, a1, b1, c1):
     return a1*np.exp(-((x-b1)/c1)**2)
 
+def heaviside(r):
+	if r < 0:
+		return 1
+	elif r > 0:
+		return 0
+	elif r == 0:
+		return 0.5
+
 
 class Error(Exception):
 	"""Base class for exceptions in this module."""
@@ -215,14 +223,14 @@ class Material:
 
 	def calculateDrudeDielectricFunction(self):
 		self.convert2au()
-		eps_real = self.oscillators.eps_b * \
-			np.squeeze(np.ones((self.eloss.shape[0], self.size_q)))
-		eps_imag = np.squeeze(np.zeros((self.eloss.shape[0], self.size_q)))
-		epsilon = np.zeros_like(eps_real, dtype=complex)
 
 		for i in range(len(self.oscillators.A)):
 			epsDrude_real, epsDrude_imag = self.calculateDrudeOscillator(
 				self.oscillators.omega[i], self.oscillators.gamma[i], self.oscillators.alpha)
+			if i == 0:
+				eps_real = self.oscillators.eps_b * np.ones_like(epsDrude_real)
+				eps_imag = np.zeros_like(epsDrude_imag)
+				epsilon = np.zeros_like(eps_real, dtype=complex)
 			eps_real -= self.oscillators.A[i] * epsDrude_real
 			eps_imag += self.oscillators.A[i] * epsDrude_imag
 
@@ -243,7 +251,10 @@ class Material:
 			# w_at_q = omega0 + (self.q_dependency(self.q / a0)/h2ev - self.q_dependency(0)/h2ev)
 		# else:
 		w_at_q = omega0 + 0.5 * alpha * self.q**2
-		omega = np.squeeze(np.array([self.eloss, ] * self.size_q).transpose())
+		if self.size_q == 1:
+			omega = np.squeeze(np.array([self.eloss, ] * self.size_q).transpose())
+		else:
+			omega = np.expand_dims(self.eloss, axis=tuple(range(1,self.q.ndim)))
 
 		mm = omega**2 - w_at_q**2
 		divisor = mm**2 + omega**2 * gamma**2
@@ -691,6 +702,94 @@ class Material:
 		plt.show()
 		if savefig and filename:
 			plt.savefig(filename, dpi=600)
+		
+	def calculateLiDiimfp(self, E0, r, alpha, n_q=10, dE=0.5):
+		old_eloss = self.eloss
+		old_q = self.q
+		old_E0 = E0
+
+		if (self.Eg > 0):
+			E0 = E0 - self.Eg
+			if old_E0 <= 100:
+				eloss = linspace(self.Eg, E0 - self.width_of_the_valence_band, dE)
+			elif old_E0 <= 1000:
+				range_1 = linspace(self.Eg, 100, dE)
+				range_2 = linspace(101, E0 - self.width_of_the_valence_band, 1)
+				eloss = np.concatenate((range_1, range_2))
+			else:
+				range_1 = linspace(self.Eg, 100, dE)
+				range_2 = linspace(110, 500, 10)
+				range_3 = linspace(600, E0 - self.width_of_the_valence_band, 100)
+				eloss = np.concatenate((range_1, range_2, range_3))
+		else:
+			if old_E0 <= 100:
+				eloss = linspace(1e-5, E0 - self.Ef, dE)
+			elif old_E0 <= 1000:
+				range_1 = linspace(1e-5, 100, dE)
+				range_2 = linspace(101, E0 - self.Ef, 1)
+				eloss = np.concatenate((range_1, range_2))
+			else:
+				range_1 = linspace(1e-5, 100, dE)
+				range_2 = linspace(110, 500, 10)
+				range_3 = linspace(600, E0 - self.Ef, 100)
+				eloss = np.concatenate((range_1, range_2, range_3))
+
+		self.eloss = eloss
+		rel_coef = ((1 + (E0/h2ev)/(c**2))**2) / (1 + (E0/h2ev)/(2*c**2))
+
+		theta = np.linspace(0, math.pi/2, 10)
+		phi = np.linspace(0, 2*math.pi, 10)
+		v = math.sqrt(2*E0/h2ev)
+		r /= a0
+		
+		q_minus = np.sqrt(E0/h2ev * (2 + E0/h2ev/(c**2))) - np.sqrt((E0/h2ev - self.eloss/h2ev) * (2 + (E0/h2ev - self.eloss/h2ev)/(c**2)))
+		q_plus = np.sqrt(E0/h2ev * (2 + E0/h2ev/(c**2))) + np.sqrt((E0/h2ev - self.eloss/h2ev) * (2 + (E0/h2ev - self.eloss/h2ev)/(c**2)))
+		q = np.linspace(q_minus, q_plus, 2**(n_q - 1), axis = 1)
+		if (self.oscillators.model == 'Mermin' or self.oscillators.model == 'MerminLL'):
+			q[q == 0] = 0.01
+		self.q = q / a0
+
+		q_ = np.expand_dims(q,axis=2) * np.sin(theta.reshape((1,1,-1)))
+		qsintheta = np.expand_dims(q,axis=2) * np.sin(theta.reshape((1,1,-1)))**2
+		qz = np.expand_dims(q,axis=2) * np.cos(theta.reshape((1,1,-1)))
+		omegawave = (self.eloss/h2ev).reshape((-1,1,1,1)) - np.expand_dims(np.expand_dims(q,axis=2) * v * np.sin(theta.reshape((1,1,-1))), axis=3) * np.cos(phi.reshape((1,1,1,-1))) * v * np.sin(alpha)
+		coef = ( np.expand_dims(qsintheta,axis=3) * np.cos(np.expand_dims(qz, axis=3)*r*np.cos(alpha)) * np.exp(-np.abs(r)*np.expand_dims(q_,axis=3)*np.cos(alpha)) ) / ( omegawave**2 + np.expand_dims(q_**2, axis=3) * (v*np.cos(alpha))**2 )
+
+		self.calculateELF()
+
+		integrand = self.ELF / q
+		integrand[q == 0] = 0
+		if (self.oscillators.model == 'Mermin' or self.oscillators.model == 'MerminLL'):
+			integrand[q == 0.01] = 0
+		bulk = rel_coef * 1/(math.pi * (E0/h2ev)) * np.trapz( integrand, q, axis = 1 ) * (1/h2ev/a0)
+
+		self.q = q_ / a0
+		self.calculateDielectricFunction()
+
+		elf = (-1 / self.epsilon).imag
+		integrand = np.expand_dims(elf, axis=3) * coef
+		bulk_reduced = 2*np.cos(alpha)/math.pi**3 * np.trapz(np.trapz(np.trapz(integrand, phi, axis=3), theta, axis=2),q)  * heaviside(-r) *1/h2ev/a0
+
+		elf = (-1 / self.epsilon + 1).imag
+		integrand = np.expand_dims(elf,axis=3)*coef
+		surf_inside = 4*np.cos(alpha)/math.pi**3 * np.trapz(np.trapz(np.trapz(integrand, phi, axis=3), theta, axis=2),q) * heaviside(-r) *1/h2ev/a0
+
+		coef = ( np.expand_dims(qsintheta,axis=3) * np.exp(-np.abs(r)*np.expand_dims(q_,axis=3)*np.cos(alpha)) ) / ( omegawave**2 + np.expand_dims(q_**2, axis=3) * (v*np.cos(alpha))**2 )
+		coef_ = 2 * np.cos(omegawave * r / v) - np.exp(-np.abs(r)*np.expand_dims(q_,axis=3)*np.cos(alpha))
+		integrand = np.expand_dims(elf,axis=3)*coef*coef_
+		surf_outside = 4*np.cos(alpha)/math.pi**3 * np.trapz(np.trapz(np.trapz(integrand, phi, axis=3), theta, axis=2),q)  * heaviside(r) *1/h2ev/a0
+
+		diimfp = bulk - bulk_reduced + surf_inside + surf_outside
+		self.DIIMFP = diimfp
+		self.DIIMFP_E = eloss
+		self.DSEP = surf_inside + surf_outside
+		self.E0 = old_E0
+		self.eloss = old_eloss
+		self.q = old_q
+		self.sep = np.trapz(self.DSEP, eloss)
+
+		return [diimfp, bulk, bulk_reduced, surf_inside, surf_outside]
+
 
 	def calculateDIIMFP(self, E0, dE = 0.5, decdigs = 10, normalised = True):
 		old_eloss = self.eloss
@@ -724,7 +823,6 @@ class Material:
 				eloss = np.concatenate((range_1, range_2, range_3))
 
 		self.eloss = eloss
-		diimfp = np.zeros_like(self.eloss)
 
 		rel_coef = ((1 + (E0/h2ev)/(c**2))**2) / (1 + (E0/h2ev)/(2*c**2))
 
@@ -838,20 +936,20 @@ class Material:
 		fd.write('VABSA   2.0        absorption-potential strength, Aabs      [default]\n')
 		fd.write('VABSD  -1.0        energy gap DELTA (eV)                    [default]\n')
 		fd.write('IHEF    2          high-E factorization (0=no, 1=yes, 2=Born)   [  1]\n')
-		fd.write(f'EV      {self.E0}     kinetic energy (eV)                         [none]\n')
+		fd.write(f'EV      {round(self.E0)}     kinetic energy (eV)                         [none]\n')
 
 		fd.close()
 
 		# output = os.system('/Users/olgaridzel/Research/ESCal/src/MaterialDatabase/Data/Elsepa/elsepa-2020/elsepa-2020 < lub.in')
 		x = subprocess.run('/Users/olgaridzel/Research/ESCal/src/MaterialDatabase/Data/Elsepa/elsepa-2020/elsepa-2020 < lub.in',shell=True,capture_output=True)
 
-		with open('dcs_' + '{:1.3e}'.format(self.E0).replace('.','p').replace('+0','0') + '.dat','r') as fd:
+		with open('dcs_' + '{:1.3e}'.format(round(self.E0)).replace('.','p').replace('+0','0') + '.dat','r') as fd:
 			self.sigma_el = self.get_sigma(fd.readlines(), 32, 'Total elastic cross section = ')
 			self.EMFP = 1/(self.sigma_el*self.atomic_density)
 			# sigma_tr_1 = get_sigma(lines, 33, '1st transport cross section = ')
 			# sigma_tr_2 = get_sigma(lines, 34, '2nd transport cross section = ')
 		
-		data = np.loadtxt('dcs_' + '{:1.3e}'.format(self.E0).replace('.','p').replace('+0','0') + '.dat', skiprows=44)
+		data = np.loadtxt('dcs_' + '{:1.3e}'.format(round(self.E0)).replace('.','p').replace('+0','0') + '.dat', skiprows=44)
 		self.DECS_deg = data[:,0]
 		self.DECS_mu = data[:,1]
 		self.DECS = data[:,2]
@@ -1270,6 +1368,7 @@ class OptFit:
 		material.calculateEnergyDistribution(self.E0, self.n_in, self.exp_data.x_spec, self.exp_data.y_spec, 0.1, self.n_q)
 		spec_interp = np.interp(self.E0 - self.exp_data.x_spec, material.spectrum_E - material.spectrum_E[np.argmax(material.spectrum)], material.spectrum)
 		chi_squared = np.sum((self.exp_data.y_spec / exp_area - spec_interp / exp_area)**2 / self.exp_data.x_spec.size)
+		# chi_squared = np.sum((self.exp_data.y_spec / exp_area - spec_interp / exp_area)**2)
 
 		if grad.size > 0:
 			grad = np.array([0, 0.5/chi_squared])
