@@ -59,15 +59,6 @@ def conv(x1, x2, de, mode='right'):
 def gauss(x, a1, b1, c1):
     return a1*np.exp(-((x-b1)/c1)**2)
 
-def heaviside(r):
-	if r < 0:
-		return 1
-	elif r > 0:
-		return 0
-	elif r == 0:
-		return 0.5
-
-
 class Error(Exception):
 	"""Base class for exceptions in this module."""
 	pass
@@ -740,56 +731,66 @@ class Material:
 		theta = np.linspace(0, math.pi/2, 10)
 		phi = np.linspace(0, 2*math.pi, 10)
 		v = math.sqrt(2*E0/h2ev)
-		r /= a0
+		r /= (a0 * np.cos(alpha))
 		
 		q_minus = np.sqrt(E0/h2ev * (2 + E0/h2ev/(c**2))) - np.sqrt((E0/h2ev - self.eloss/h2ev) * (2 + (E0/h2ev - self.eloss/h2ev)/(c**2)))
 		q_plus = np.sqrt(E0/h2ev * (2 + E0/h2ev/(c**2))) + np.sqrt((E0/h2ev - self.eloss/h2ev) * (2 + (E0/h2ev - self.eloss/h2ev)/(c**2)))
 		q = np.linspace(q_minus, q_plus, 2**(n_q - 1), axis = 1)
 		if (self.oscillators.model == 'Mermin' or self.oscillators.model == 'MerminLL'):
 			q[q == 0] = 0.01
-		self.q = q / a0
 
 		q_ = np.expand_dims(q,axis=2) * np.sin(theta.reshape((1,1,-1)))
 		qsintheta = np.expand_dims(q,axis=2) * np.sin(theta.reshape((1,1,-1)))**2
-		qz = np.expand_dims(q,axis=2) * np.cos(theta.reshape((1,1,-1)))
-		omegawave = (self.eloss/h2ev).reshape((-1,1,1,1)) - np.expand_dims(np.expand_dims(q,axis=2) * v * np.sin(theta.reshape((1,1,-1))), axis=3) * np.cos(phi.reshape((1,1,1,-1))) * v * np.sin(alpha)
-		coef = ( np.expand_dims(qsintheta,axis=3) * np.cos(np.expand_dims(qz, axis=3)*r*np.cos(alpha)) * np.exp(-np.abs(r)*np.expand_dims(q_,axis=3)*np.cos(alpha)) ) / ( omegawave**2 + np.expand_dims(q_**2, axis=3) * (v*np.cos(alpha))**2 )
+		omegawave = (self.eloss/h2ev).reshape((-1,1,1,1)) - np.expand_dims(np.expand_dims(q,axis=2) * v * np.sin(theta.reshape((1,1,-1))), axis=3) * np.cos(phi.reshape((1,1,1,-1))) * np.sin(alpha)
+	
+		if (r >= 0):					
+			qz = np.expand_dims(q,axis=2) * np.cos(theta.reshape((1,1,-1)))
+			coef = ( np.expand_dims(qsintheta,axis=3) * np.cos(np.expand_dims(qz, axis=3)*r*np.cos(alpha)) * np.exp(-np.abs(r)*np.expand_dims(q_,axis=3)*np.cos(alpha)) ) / ( omegawave**2 + np.expand_dims(q_**2, axis=3) * (v*np.cos(alpha))**2 )
 
-		self.calculateELF()
+			self.q = q / a0
+			self.calculateELF()
+			integrand = self.ELF / q
+			integrand[q == 0] = 0
+			if (self.oscillators.model == 'Mermin' or self.oscillators.model == 'MerminLL'):
+				integrand[q == 0.01] = 0
+			bulk = 1/(math.pi * (E0/h2ev)) * np.trapz( integrand, q, axis = 1 ) * (1/h2ev/a0) * np.heaviside(r, 0.5)
 
-		integrand = self.ELF / q
-		integrand[q == 0] = 0
-		if (self.oscillators.model == 'Mermin' or self.oscillators.model == 'MerminLL'):
-			integrand[q == 0.01] = 0
-		bulk = rel_coef * 1/(math.pi * (E0/h2ev)) * np.trapz( integrand, q, axis = 1 ) * (1/h2ev/a0)
+			self.q = q_ / a0
+			self.calculateDielectricFunction()
 
-		self.q = q_ / a0
-		self.calculateDielectricFunction()
+			elf = (-1 / self.epsilon).imag
+			integrand = np.expand_dims(elf, axis=3) * coef
+			bulk_reduced = 2*np.cos(alpha)/math.pi**3 * np.trapz(np.trapz(np.trapz(integrand, phi, axis=3), theta, axis=2), q) * (1/h2ev/a0) * np.heaviside(r, 0.5)
 
-		elf = (-1 / self.epsilon).imag
-		integrand = np.expand_dims(elf, axis=3) * coef
-		bulk_reduced = 2*np.cos(alpha)/math.pi**3 * np.trapz(np.trapz(np.trapz(integrand, phi, axis=3), theta, axis=2),q)  * heaviside(-r) *1/h2ev/a0
+			elf = (-1 / (self.epsilon + 1)).imag
+			integrand = np.expand_dims(elf,axis=3)*coef
+			surf_inside = 4*np.cos(alpha)/math.pi**3 * np.trapz(np.trapz(np.trapz(integrand, phi, axis=3), theta, axis=2), q) * (1/h2ev/a0) * np.heaviside(r, 0.5)
+			
+			coef = ( np.expand_dims(qsintheta,axis=3) * np.exp(-np.abs(r)*np.expand_dims(q_,axis=3)*np.cos(alpha)) ) / ( omegawave**2 + np.expand_dims(q_**2, axis=3) * (v*np.cos(alpha))**2 )
+			coef_ = 2 * np.cos(omegawave * r / v) - np.exp(-np.abs(r)*np.expand_dims(q_,axis=3)*np.cos(alpha))
+			integrand = np.expand_dims(elf,axis=3)*coef*coef_
+			surf_outside = 4*np.cos(alpha)/math.pi**3 * np.trapz(np.trapz(np.trapz(integrand, phi, axis=3), theta, axis=2), q) * (1/h2ev/a0) * np.heaviside(-r, 0.5)
+			
+			dsep = rel_coef * ( surf_inside + surf_outside )
+			diimfp = rel_coef * ( bulk - bulk_reduced + surf_inside + surf_outside )
+		else:
+			self.q = q_ / a0
+			self.calculateDielectricFunction()
+			elf = (-1 / (self.epsilon + 1)).imag
 
-		elf = (-1 / self.epsilon + 1).imag
-		integrand = np.expand_dims(elf,axis=3)*coef
-		surf_inside = 4*np.cos(alpha)/math.pi**3 * np.trapz(np.trapz(np.trapz(integrand, phi, axis=3), theta, axis=2),q) * heaviside(-r) *1/h2ev/a0
-
-		coef = ( np.expand_dims(qsintheta,axis=3) * np.exp(-np.abs(r)*np.expand_dims(q_,axis=3)*np.cos(alpha)) ) / ( omegawave**2 + np.expand_dims(q_**2, axis=3) * (v*np.cos(alpha))**2 )
-		coef_ = 2 * np.cos(omegawave * r / v) - np.exp(-np.abs(r)*np.expand_dims(q_,axis=3)*np.cos(alpha))
-		integrand = np.expand_dims(elf,axis=3)*coef*coef_
-		surf_outside = 4*np.cos(alpha)/math.pi**3 * np.trapz(np.trapz(np.trapz(integrand, phi, axis=3), theta, axis=2),q)  * heaviside(r) *1/h2ev/a0
-
-		diimfp = bulk - bulk_reduced + surf_inside + surf_outside
+			coef = ( np.expand_dims(qsintheta,axis=3) * np.exp(-np.abs(r)*np.expand_dims(q_,axis=3)*np.cos(alpha)) ) / ( omegawave**2 + np.expand_dims(q_**2, axis=3) * (v*np.cos(alpha))**2 )
+			coef_ = 2 * np.cos(omegawave * r / v) - np.exp(-np.abs(r)*np.expand_dims(q_,axis=3)*np.cos(alpha))
+			integrand = np.expand_dims(elf,axis=3)*coef*coef_
+			dsep = rel_coef * 4*np.cos(alpha)/math.pi**3 * np.trapz(np.trapz(np.trapz(integrand, phi, axis=3), theta, axis=2),q) * (1/h2ev/a0) * np.heaviside(-r, 0.5)
+			diimfp = dsep
+		
 		self.DIIMFP = diimfp
 		self.DIIMFP_E = eloss
-		self.DSEP = surf_inside + surf_outside
+		self.DSEP = dsep
 		self.E0 = old_E0
 		self.eloss = old_eloss
 		self.q = old_q
-		self.sep = np.trapz(self.DSEP, eloss)
-
-		return [diimfp, bulk, bulk_reduced, surf_inside, surf_outside]
-
+		self.sep = np.trapz(self.DSEP, eloss, axis=0) 
 
 	def calculateDIIMFP(self, E0, dE = 0.5, decdigs = 10, normalised = True):
 		old_eloss = self.eloss
