@@ -693,8 +693,123 @@ class Material:
 		plt.show()
 		if savefig and filename:
 			plt.savefig(filename, dpi=600)
+	
+	def calculateLiDiimfp_vs(self, E0, r, alpha, n_q=10, dE=0.5):
+		old_eloss = self.eloss
+		old_q = self.q
+		old_E0 = E0
+
+		if (self.Eg > 0):
+			E0 = E0 - self.Eg
+			if old_E0 <= 100:
+				eloss = linspace(self.Eg, E0 - self.width_of_the_valence_band, dE)
+			elif old_E0 <= 1000:
+				range_1 = linspace(self.Eg, 100, dE)
+				range_2 = linspace(101, E0 - self.width_of_the_valence_band, 1)
+				eloss = np.concatenate((range_1, range_2))
+			else:
+				range_1 = linspace(self.Eg, 100, dE)
+				range_2 = linspace(110, 500, 10)
+				range_3 = linspace(600, E0 - self.width_of_the_valence_band, 100)
+				eloss = np.concatenate((range_1, range_2, range_3))
+		else:
+			if old_E0 <= 100:
+				eloss = linspace(1e-5, E0 - self.Ef, dE)
+			elif old_E0 <= 1000:
+				range_1 = linspace(1e-5, 100, dE)
+				range_2 = linspace(101, E0 - self.Ef, 1)
+				eloss = np.concatenate((range_1, range_2))
+			else:
+				range_1 = linspace(1e-5, 100, dE)
+				range_2 = linspace(110, 500, 10)
+				range_3 = linspace(600, E0 - self.Ef, 100)
+				eloss = np.concatenate((range_1, range_2, range_3))
+
+		self.eloss = eloss
+		rel_coef = ((1 + (E0/h2ev)/(c**2))**2) / (1 + (E0/h2ev)/(2*c**2))
+
+		theta = np.linspace(0, math.pi/2, 10)
+		phi = np.linspace(0, 2*math.pi, 10)
+		v = math.sqrt(2*E0/h2ev)
+		r /= (a0 * np.cos(alpha))
 		
-	def calculateLiDiimfp(self, E0, r, alpha, n_q=10, dE=0.5):
+		q_minus = np.sqrt(E0/h2ev * (2 + E0/h2ev/(c**2))) - np.sqrt((E0/h2ev - self.eloss/h2ev) * (2 + (E0/h2ev - self.eloss/h2ev)/(c**2)))
+		q_plus = np.sqrt(E0/h2ev * (2 + E0/h2ev/(c**2))) + np.sqrt((E0/h2ev - self.eloss/h2ev) * (2 + (E0/h2ev - self.eloss/h2ev)/(c**2)))
+		q = np.linspace(q_minus, q_plus, 2**(n_q - 1), axis = 1)
+		if (self.oscillators.model == 'Mermin' or self.oscillators.model == 'MerminLL'):
+			q[q == 0] = 0.01
+
+		q_ = np.expand_dims(q,axis=2) * np.sin(theta.reshape((1,1,-1)))
+		qsintheta = np.expand_dims(q,axis=2) * np.sin(theta.reshape((1,1,-1)))**2
+		omegawave = (self.eloss/h2ev).reshape((-1,1,1,1)) - np.expand_dims(np.expand_dims(q,axis=2) * v * np.sin(theta.reshape((1,1,-1))), axis=3) * np.cos(phi.reshape((1,1,1,-1))) * np.sin(alpha)
+		qz = np.expand_dims(q,axis=2) * np.cos(theta.reshape((1,1,-1)))
+		coef = ( np.expand_dims(qsintheta,axis=3) * np.cos(np.expand_dims(qz, axis=3)*r*np.cos(alpha)) * np.exp(-np.abs(r)*np.expand_dims(q_,axis=3)*np.cos(alpha)) ) / ( omegawave**2 + np.expand_dims(q_**2, axis=3) * (v*np.cos(alpha))**2 )
+
+		if (r >= 0):					
+			
+			self.q = q / a0
+			self.calculateELF()
+			integrand = self.ELF / q
+			integrand[q == 0] = 0
+			if (self.oscillators.model == 'Mermin' or self.oscillators.model == 'MerminLL'):
+				integrand[q == 0.01] = 0
+			bulk = 1/(math.pi * (E0/h2ev)) * np.trapz( integrand, q, axis = 1 ) * (1/h2ev/a0) * np.heaviside(r, 0.5)
+
+			self.q = q_ / a0
+			self.calculateDielectricFunction()
+
+			elf = (-1 / (self.epsilon + 1)).imag
+			integrand = np.expand_dims(elf,axis=3)*coef
+			integrand[q_ == 0] = 0
+			if (self.oscillators.model == 'Mermin' or self.oscillators.model == 'MerminLL'):
+				integrand[q_ == 0.01] = 0
+			surf_outside = 4*np.cos(alpha)/math.pi**3 * np.trapz(np.trapz(np.trapz(integrand, phi, axis=3), theta, axis=2), q) * (1/h2ev/a0) * np.heaviside(-r, 0.5)
+			
+			coef = ( np.expand_dims(qsintheta,axis=3) * np.exp(-np.abs(r)*np.expand_dims(q_,axis=3)*np.cos(alpha)) ) / ( omegawave**2 + np.expand_dims(q_**2, axis=3) * (v*np.cos(alpha))**2 )
+			coef_ = 2 * np.cos(omegawave * r / v) - np.exp(-np.abs(r)*np.expand_dims(q_,axis=3)*np.cos(alpha))
+			
+			integrand = np.expand_dims(elf,axis=3)*coef*coef_
+			integrand[q_ == 0] = 0
+			if (self.oscillators.model == 'Mermin' or self.oscillators.model == 'MerminLL'):
+				integrand[q_ == 0.01] = 0
+			surf_inside = 4*np.cos(alpha)/math.pi**3 * np.trapz(np.trapz(np.trapz(integrand, phi, axis=3), theta, axis=2), q) * (1/h2ev/a0) * np.heaviside(r, 0.5)
+			
+			elf = (-1 / self.epsilon).imag
+			integrand = np.expand_dims(elf,axis=3)*coef*coef_
+			integrand[q_ == 0] = 0
+			if (self.oscillators.model == 'Mermin' or self.oscillators.model == 'MerminLL'):
+				integrand[q_ == 0.01] = 0
+			bulk_reduced = 2*np.cos(alpha)/math.pi**3 * np.trapz(np.trapz(np.trapz(integrand, phi, axis=3), theta, axis=2), q) * (1/h2ev/a0) * np.heaviside(r, 0.5)
+
+			dsep = rel_coef * ( surf_inside + surf_outside )
+			diimfp = rel_coef * bulk
+			total = rel_coef * ( bulk - bulk_reduced + surf_inside + surf_outside )
+			self.bulk_reduced = bulk_reduced
+		else:
+			self.q = q_ / a0
+			self.calculateDielectricFunction()
+			elf = (-1 / (self.epsilon + 1)).imag
+
+			integrand = np.expand_dims(elf,axis=3)*coef
+			integrand[q_ == 0] = 0
+			if (self.oscillators.model == 'Mermin' or self.oscillators.model == 'MerminLL'):
+				integrand[q_ == 0.01] = 0
+			dsep = rel_coef * 4*np.cos(alpha)/math.pi**3 * np.trapz(np.trapz(np.trapz(integrand, phi, axis=3), theta, axis=2), q) * (1/h2ev/a0) * np.heaviside(-r, 0.5)
+			diimfp = dsep
+			total = dsep
+			self.bulk_reduced = np.zeros_like(dsep)
+		
+		self.DIIMFP = diimfp
+		self.totalDIIMFP = total
+		
+		self.DIIMFP_E = eloss
+		self.DSEP = dsep
+		self.E0 = old_E0
+		self.eloss = old_eloss
+		self.q = old_q
+		self.sep = np.trapz(self.DSEP, eloss, axis=0) 
+
+	def calculateLiDiimfp_sv(self, E0, r, alpha, n_q=10, dE=0.5):
 		old_eloss = self.eloss
 		old_q = self.q
 		old_E0 = E0
@@ -1109,44 +1224,52 @@ class Material:
 		return popt
 
 	def calculateEnergyDistribution(self, E0, theta_i, theta_o, n_in, x_exp, y_exp, dE=0.5, n_q=10):
-		depth = [-6,-4,-2,0,2,4,6]
+		depth = np.array([-6,-4,-2,0,2,4,6])
 		i = 0
 		for r in depth:
-			self.calculateLiDiimfp(E0, r, theta_i, n_q, dE)
+			self.calculateLiDiimfp_vs(E0, r, theta_i, n_q, dE)
+
 			if i == 0:
 				dsep_i = np.zeros((len(depth),) + self.DSEP.shape)
 				dsep_o = np.zeros((len(depth),) + self.DSEP.shape)
+				total_i = np.zeros((len(depth),) + self.totalDIIMFP.shape)
+				total_o = np.zeros((len(depth),) + self.totalDIIMFP.shape)
+
 			dsep_i[i] = self.DSEP - self.bulk_reduced
-			self.calculateLiDiimfp(E0, r, theta_o, n_q, dE)
+			total_i[i] = self.totalDIIMFP
+
+			self.calculateLiDiimfp_sv(E0, r, theta_o, n_q, dE)
 			dsep_o[i] = self.DSEP - self.bulk_reduced
+			total_o[i] = self.totalDIIMFP
+			
 			i += 1
 		
-		self.DSEP_i = np.trapz(dsep_i, depth / np.cos(theta_i), axis=0)
-		self.DSEP_o = np.trapz(dsep_o, depth / np.cos(theta_o), axis=0)
-		
-		self.DIIMFP[np.isnan(self.DIIMFP)] = 1e-5
 		self.DIIMFP /= np.trapz(self.DIIMFP, self.DIIMFP_E)
-		self.DSEP_i[np.isnan(self.DSEP_i)] = 1e-5
-		self.DSEP_o[np.isnan(self.DSEP_o)] = 1e-5
-
-		self.sep = np.trapz(self.DSEP_i, self.DIIMFP_E)
+		self.DIIMFP[np.isnan(self.DIIMFP)] = 1e-5
+		
+		self.SEP_i = np.trapz( np.trapz(total_i, self.DIIMFP_E,axis=1)[depth<=0], depth[depth<=0] / np.cos(theta_i))
+		print(self.SEP_i)
+		self.DSEP_i = np.trapz(dsep_i, depth / np.cos(theta_i), axis=0)	
 		self.DSEP = self.DSEP_i / np.trapz(self.DSEP_i, self.DIIMFP_E)
+		self.DSEP[np.isnan(self.DSEP)] = 1e-5	
 		convs_s = self.calculateDsepConvolutions(n_in-1)
-		self.partial_intensities_s_i = stats.poisson(self.sep).pmf(range(n_in))
+		self.partial_intensities_s_i = stats.poisson(self.SEP_i).pmf(range(n_in))
 		self.energy_distribution_s_i = np.sum(convs_s*np.squeeze(self.partial_intensities_s_i),axis=1)
-
-		self.sep = np.trapz(self.DSEP_o, self.DIIMFP_E)
+		convs_b = self.calculateDiimfpConvolutions(n_in-1)
+		self.energy_distribution_b = np.sum(convs_b*np.squeeze(self.partial_intensities / self.partial_intensities[0]),axis=1)
+		
+		self.SEP_o = np.trapz( np.trapz(total_o, self.DIIMFP_E,axis=1)[depth<=0], depth[depth<=0] / np.cos(theta_o))
+		print(self.SEP_o)	
+		self.DSEP_o = np.trapz(dsep_o, depth / np.cos(theta_o), axis=0)
 		self.DSEP = self.DSEP_o / np.trapz(self.DSEP_o, self.DIIMFP_E)
+		self.DSEP[np.isnan(self.DSEP)] = 1e-5
 		convs_s = self.calculateDsepConvolutions(n_in-1)
-		self.partial_intensities_s_o = stats.poisson(self.sep).pmf(range(n_in))
+		self.partial_intensities_s_o = stats.poisson(self.SEP_o).pmf(range(n_in))
 		self.energy_distribution_s_o = np.sum(convs_s*np.squeeze(self.partial_intensities_s_o),axis=1)
-
-		convs = self.calculateDiimfpConvolutions(n_in-1)
-		self.energy_distribution = np.sum(convs*np.squeeze(self.partial_intensities / self.partial_intensities[0]),axis=1)
 		
 		extra = np.linspace(-10,-dE, round(10/dE))
 		self.spectrum_E = np.concatenate((extra, self.DIIMFP_E))
-		sb = conv(self.energy_distribution_s_i, self.energy_distribution, dE)
+		sb = conv(self.energy_distribution_s_i, self.energy_distribution_b, dE)
 		sbs = np.concatenate((np.zeros_like(extra), conv(sb, self.energy_distribution_s_o, dE) ))
 		coefs = self.fitElasticPeak(x_exp, y_exp)
 		gaussian = gauss(linspace(-10,10,dE), coefs[0], 0, coefs[2])
@@ -1401,8 +1524,10 @@ class OptFit:
 		material = self.vec2Struct(osc_vec)
 		material.calculate(self.E0, self.n_in, 200, self.mu_i, self.mu_o)
 		material.calculateEnergyDistribution(self.E0, alpha_i, alpha_o, self.n_in, self.exp_data.x_spec, self.exp_data.y_spec, self.dE, self.n_q)
-		spec_interp = np.interp(self.E0 - self.exp_data.x_spec, material.spectrum_E - material.spectrum_E[np.argmax(material.spectrum)], material.spectrum)
-		chi_squared = np.sum((self.exp_data.y_spec / exp_area - spec_interp / exp_area)**2 / self.exp_data.x_spec.size)
+
+		ind = self.exp_data.x_spec < self.exp_data.x_spec[np.argmax(self.exp_data.y_spec)] - 5
+		spec_interp = np.interp(self.E0 - self.exp_data.x_spec[ind], material.spectrum_E - material.spectrum_E[np.argmax(material.spectrum)], material.spectrum)
+		chi_squared = np.sum((self.exp_data.y_spec[ind] / exp_area - spec_interp / exp_area)**2 / self.exp_data.x_spec.size)
 		# chi_squared = np.sum((self.exp_data.y_spec / exp_area - spec_interp / exp_area)**2)
 
 		if grad.size > 0:
