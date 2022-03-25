@@ -1248,7 +1248,6 @@ class Material:
 		self.DIIMFP[np.isnan(self.DIIMFP)] = 1e-5
 		
 		self.SEP_i = np.trapz( np.trapz(total_i, self.DIIMFP_E,axis=1)[depth<=0], depth[depth<=0] / np.cos(theta_i))
-		print(self.SEP_i)
 		self.DSEP_i = np.trapz(dsep_i, depth / np.cos(theta_i), axis=0)	
 		self.DSEP = self.DSEP_i / np.trapz(self.DSEP_i, self.DIIMFP_E)
 		self.DSEP[np.isnan(self.DSEP)] = 1e-5	
@@ -1258,8 +1257,7 @@ class Material:
 		convs_b = self.calculateDiimfpConvolutions(n_in-1)
 		self.energy_distribution_b = np.sum(convs_b*np.squeeze(self.partial_intensities / self.partial_intensities[0]),axis=1)
 		
-		self.SEP_o = np.trapz( np.trapz(total_o, self.DIIMFP_E,axis=1)[depth<=0], depth[depth<=0] / np.cos(theta_o))
-		print(self.SEP_o)	
+		self.SEP_o = np.trapz( np.trapz(total_o, self.DIIMFP_E,axis=1)[depth<=0], depth[depth<=0] / np.cos(theta_o))	
 		self.DSEP_o = np.trapz(dsep_o, depth / np.cos(theta_o), axis=0)
 		self.DSEP = self.DSEP_o / np.trapz(self.DSEP_o, self.DIIMFP_E)
 		self.DSEP[np.isnan(self.DSEP)] = 1e-5
