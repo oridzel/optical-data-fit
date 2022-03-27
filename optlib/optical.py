@@ -1317,7 +1317,9 @@ class Material:
 				if any(ind):
 					self.partial_intensities[k] = self.angular_distribution[ind,k]
 				else:
-					self.partial_intensities[k] = np.interp(mu_o, self.mu_mesh, self.angular_distribution[:,k])
+					f = interpolate.interp1d(self.mu_mesh, self.angular_distribution[:,k])
+					self.partial_intensities[k] = f(mu_o)
+					# self.partial_intensities[k] = np.interp(mu_o, self.mu_mesh, self.angular_distribution[:,k])
 
 	def calculateDiimfpConvolutions(self, n_in):
 		if self.DIIMFP is None:
