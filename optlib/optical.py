@@ -1305,10 +1305,12 @@ class Material:
 	def calculatePartialIntensities(self, mu_o, n_in, solid_angle=0):
 		if solid_angle > 0:
 			theta_o = np.arccos(mu_o)
-			mu_ = np.linspace(np.cos(theta_o - solid_angle/2), np.cos(theta_o + solid_angle/2), 10)
+			mu_ = np.linspace(np.cos(theta_o - solid_angle/2), np.cos(theta_o + solid_angle/2), 20)
 			self.partial_intensities = np.zeros((n_in, mu_.size))
 			for k in range(n_in):
-				self.partial_intensities[k,:] = np.interp(mu_, self.mu_mesh, self.angular_distribution[:,k])
+				f = interpolate.interp1d(self.mu_mesh, self.angular_distribution[:,k])
+				self.partial_intensities[k,:] = f(mu_)
+				# self.partial_intensities[k,:] = np.interp(mu_, self.mu_mesh, self.angular_distribution[:,k])
 		else:
 			self.partial_intensities = np.zeros(n_in)
 			ind = self.mu_mesh == mu_o
@@ -1385,10 +1387,8 @@ class Material:
 		self.energy_distribution_s_i = np.sum(convs_s*np.squeeze(self.partial_intensities_s_i / self.partial_intensities_s_i[0]),axis=1)
 		convs_b = self.calculateDiimfpConvolutions(n_in-1)
 		if solid_angle > 0:
-			mu_ = np.linspace(np.cos(theta_o - solid_angle/2), np.cos(theta_o + solid_angle/2), 10)
-			self.energy_distribution_b = np.zeros(convs_b.shape[0])
-			for i in range(convs_b.shape[1]):
-				self.energy_distribution_b += -np.trapz(np.expand_dims(convs_b[:,i],axis=1) * self.partial_intensities[i] / self.partial_intensities[0]*2*math.pi, mu_, axis=1)
+			mu_ = np.linspace(np.cos(theta_o - solid_angle/2), np.cos(theta_o + solid_angle/2), 20)
+			self.energy_distribution_b = np.trapz(np.sum(np.expand_dims((self.partial_intensities / self.partial_intensities[0]).T,axis=2)*convs_b.T,axis=1),mu_,axis=0)
 		else:
 			self.energy_distribution_b = np.sum(convs_b*np.squeeze(self.partial_intensities / self.partial_intensities[0]),axis=1)
 		
@@ -1408,11 +1408,16 @@ class Material:
 		gaussian = gauss(linspace(-10,10,dE), coefs[0], 0, coefs[2])
 		self.spectrum = conv(self.sbs, gaussian, dE)
 
-	def calculateEnergyDistribution(self, E0, n_in, x_exp, y_exp, dE=0.5, n_q=10, solid_angle=0):
+	def calculateEnergyDistribution(self, E0, theta_o, n_in, x_exp, y_exp, dE=0.5, n_q=10, solid_angle=0):
 		
 		self.calculateDIIMFP(E0, dE, n_q)
 		convs_b = self.calculateDiimfpConvolutions(n_in-1)		
-		self.energy_distribution_b = np.sum(convs_b*np.squeeze(self.partial_intensities / self.partial_intensities[0]),axis=1)
+		if solid_angle > 0:
+			mu_ = np.linspace(np.cos(theta_o - solid_angle/2), np.cos(theta_o + solid_angle/2), 20)
+			self.energy_distribution_b = np.trapz(np.sum(np.expand_dims((self.partial_intensities / self.partial_intensities[0]).T,axis=2)*convs_b.T,axis=1),mu_,axis=0)
+		else:
+			self.energy_distribution_b = np.sum(convs_b*np.squeeze(self.partial_intensities / self.partial_intensities[0]),axis=1)
+
 		
 		extra = np.linspace(-10,-dE, round(10/dE))
 		self.spectrum_E = np.concatenate((extra, self.DIIMFP_E))
