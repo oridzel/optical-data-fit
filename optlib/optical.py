@@ -1055,6 +1055,7 @@ class SAReflection:
 	isinf = True
 	_phi = 0
 	n_spherical_harmonics = 1
+	surface_done = False
 
 	def __init__(self, material, e0):
 		if not isinstance(material, Material):
@@ -1170,7 +1171,11 @@ class SAReflection:
 			self.x_l[l] = np.trapz(decs * special.lpmv(0, l, x), x)
 
 	def calculate(self):
-		self.material.TMFP = 1 / (1/self.material.IMFP[0] + 1/self.material.EMFP)
+		if self.isinf:
+			self.material.TMFP = 1 / (1/self.material.IMFP[0] + 1/self.material.EMFP)
+		else:
+			imfp = np.mean((self.material.IMFP_s_i, self.material.IMFP_s_o))
+			self.material.TMFP = 1 / (1/imfp + 1/self.material.EMFP)
 		self.material.albedo = self.material.TMFP / self.material.EMFP
 		norm = 1/2/math.pi
 
@@ -1219,22 +1224,16 @@ class SAReflection:
 		
 		print('Angular Distribution calculated')
 
-	def calculatePartialIntensities(self, solid_angle=0):
+	def calculatePartialIntensities(self):
 		self.partial_intensities = np.zeros(self.n_in)
-		if solid_angle > 0:
-			mu_ = np.cos(np.linspace(np.arccos(self.mu_o), np.arccos(self.mu_o) + solid_angle/2, 100))
-			for k in range(self.n_in):
-				f = interpolate.interp1d(self.mu_mesh, self.angular_distribution[:,k])
-				self.partial_intensities[k] = -np.trapz(f(mu_), mu_)
-		else:
-			ind = self.mu_mesh == self.mu_o
+		ind = self.mu_mesh == self.mu_o
 
-			for k in range(self.n_in):
-				if any(ind):
-					self.partial_intensities[k] = self.angular_distribution[ind,k]
-				else:
-					f = interpolate.interp1d(self.mu_mesh, self.angular_distribution[:,k])
-					self.partial_intensities[k] = f(self.mu_o)
+		for k in range(self.n_in):
+			if any(ind):
+				self.partial_intensities[k] = self.angular_distribution[ind,k]
+			else:
+				f = interpolate.interp1d(self.mu_mesh, self.angular_distribution[:,k])
+				self.partial_intensities[k] = f(self.mu_o)
 
 		print('Partial Intensities calculated')
 
@@ -1270,14 +1269,21 @@ class SAReflection:
 		popt, pcov = optimize.curve_fit(gauss, x, y, [np.max(y), x[np.argmax(y)], 1])
 		return popt
 
-	def calculateEnergyDistributionBulk(self):
-		
-		self.material.calculateDIIMFP(self.e_primary, self.de, self.n_q)
-		convs_b = self.calculateDiimfpConvolutions()		
-		self.energy_distribution = np.sum(convs_b*np.squeeze(self.partial_intensities / self.partial_intensities[0]),axis=1)
+	def calculateEnergyDistributionBulk(self, solid_angle=0):
+		convs_b = self.calculateDiimfpConvolutions()
+		if solid_angle > 0:
+			if solid_angle == 90:
+				self.energy_distribution_b = np.trapz(-2*math.pi * (np.mat(convs_b) * np.mat(self.angular_distribution.T)), self.mu_mesh, axis=1)
+			else:
+				solid_angle = np.deg2rad(solid_angle)
+				mu_ = np.cos(np.linspace(np.arccos(self.mu_o), np.arccos(self.mu_o) + solid_angle, 100))
+				f = interpolate.interp1d(self.mu_mesh, self.angular_distribution, axis=0)
+				self.energy_distribution_b = np.trapz(-2*math.pi * (np.mat(convs_b) * np.mat(f(mu_).T)), mu_, axis=1)
+		else:
+			# self.energy_distribution_b = np.sum(convs_b*np.squeeze(self.partial_intensities / self.partial_intensities[0]),axis=1)
+			self.energy_distribution_b = np.sum(convs_b*np.squeeze(self.partial_intensities),axis=1)
 
-	def calculateEnergyDistributionBulkSurface(self, solid_angle=0):
-		depth = np.array([-6,-4,-2,0,2,4,6])
+	def prepareDSEP(self, depth):
 		i = 0
 		for r in depth:
 			self.material.calculateLiDiimfp_vs(self.e_primary, r, self.theta_i, self.n_q, self.de)
@@ -1296,33 +1302,61 @@ class SAReflection:
 			total_o[i] = self.material.totalDIIMFP
 			
 			i += 1
+		return dsep_i, dsep_o, total_i, total_o
+
+	def calculateEnergyDistributionSurface(self):
+		depth = np.array([-6,-4,-2,0,2,4,6])
+		dsep_i, dsep_o, total_i, total_o = self.prepareDSEP(depth)
 		
 		self.material.DIIMFP /= np.trapz(self.material.DIIMFP, self.material.DIIMFP_E)
 		self.material.DIIMFP[np.isnan(self.material.DIIMFP)] = 1e-5
 		
 		self.material.SEP_i = np.trapz( np.trapz(total_i, self.material.DIIMFP_E,axis=1)[depth<=0], depth[depth<=0] / np.cos(self.theta_i))
-		self.material.DSEP_i = np.trapz(dsep_i, depth / np.cos(self.theta_i), axis=0)	
+		self.material.DSEP_i = np.trapz(dsep_i, depth / np.cos(self.theta_i), axis=0)
+		self.material.totalDIIMFP_i = np.trapz(total_i, depth / np.cos(self.theta_i), axis=0)
+		self.material.IMFP_s_i = 1 / np.trapz(self.material.DSEP_i, self.material.DIIMFP_E)
+		self.material.IMFP_t_i = 1 / np.trapz(self.material.totalDIIMFP_i, self.material.DIIMFP_E)
 		self.material.DSEP = self.material.DSEP_i / np.trapz(self.material.DSEP_i, self.material.DIIMFP_E)
 		self.material.DSEP[np.isnan(self.material.DSEP)] = 1e-5	
-		convs_s = self.calculateDsepConvolutions()
+		# self.convs_s = self.calculateDsepConvolutions()
+		self.material.totalDIIMFP = self.material.totalDIIMFP_i / np.trapz(self.material.totalDIIMFP_i, self.material.DIIMFP_E)
+		self.material.totalDIIMFP[np.isnan(self.material.totalDIIMFP)] = 1e-5	
+		self.convs_s = self.calculateDsepConvolutions()
 		self.partial_intensities_s_i = stats.poisson(self.material.SEP_i).pmf(range(self.n_in))
-		self.energy_distribution_s_i = np.sum(convs_s*np.squeeze(self.partial_intensities_s_i / self.partial_intensities_s_i[0]),axis=1)
-		convs_b = self.calculateDiimfpConvolutions()
-		if solid_angle > 0:
-			self.energy_distribution_b = -2*math.pi*np.trapz(np.sum(np.expand_dims(self.angular_distribution,axis=2)*convs_b.T,axis=1),self.mu_mesh,axis=0)
-		else:
-			self.energy_distribution_b = np.sum(convs_b*np.squeeze(self.partial_intensities / self.partial_intensities[0]),axis=1)
+		# self.energy_distribution_s_i = np.sum(self.convs_s*np.squeeze(self.partial_intensities_s_i / self.partial_intensities_s_i[0]),axis=1)
+		self.energy_distribution_s_i = np.sum(self.convs_s*np.squeeze(self.partial_intensities_s_i),axis=1)
 		
 		self.material.SEP_o = np.trapz( np.trapz(total_o, self.material.DIIMFP_E,axis=1)[depth<=0], depth[depth<=0] / np.cos(self.theta_o))	
 		self.material.DSEP_o = np.trapz(dsep_o, depth / np.cos(self.theta_o), axis=0)
+		self.material.totalDIIMFP_o = np.trapz(total_o, depth / np.cos(self.theta_o), axis=0)
+		self.material.IMFP_s_o = 1 / np.trapz(self.material.DSEP_o, self.material.DIIMFP_E)
+		self.material.IMFP_t_o = 1 / np.trapz(self.material.totalDIIMFP_o, self.material.DIIMFP_E)
 		self.material.DSEP = self.material.DSEP_o / np.trapz(self.material.DSEP_o, self.material.DIIMFP_E)
 		self.material.DSEP[np.isnan(self.material.DSEP)] = 1e-5
-		convs_s = self.calculateDsepConvolutions()
+		self.material.totalDIIMFP = self.material.totalDIIMFP_o / np.trapz(self.material.totalDIIMFP_o, self.material.DIIMFP_E)
+		self.material.totalDIIMFP[np.isnan(self.material.totalDIIMFP)] = 1e-5
+		self.convs_s = self.calculateDsepConvolutions()
 		self.partial_intensities_s_o = stats.poisson(self.material.SEP_o).pmf(range(self.n_in))
-		self.energy_distribution_s_o = np.sum(convs_s*np.squeeze(self.partial_intensities_s_o / self.partial_intensities_s_o[0]),axis=1)
+		# self.energy_distribution_s_o = np.sum(self.convs_s*np.squeeze(self.partial_intensities_s_o / self.partial_intensities_s_o[0]),axis=1)
+		self.energy_distribution_s_o = np.sum(self.convs_s*np.squeeze(self.partial_intensities_s_o),axis=1)
+
+		self.surface_done = True
+
+	def calculateEnergyDistribution(self, solid_angle=0):
+
+		if not self.surface_done:
+			self.calculateEnergyDistributionSurface()
+
+		self.calculateEnergyDistributionBulk(solid_angle)
+
+		self.tau = 6
+		self.calculate()
+		self.calculatePartialIntensities()
+		# self.rs = np.sum(self.convs_s*np.squeeze(self.partial_intensities / self.partial_intensities[0]),axis=1)
+		self.rs = np.sum(self.convs_s*np.squeeze(self.partial_intensities),axis=1)
 
 		self.sb = conv(self.energy_distribution_s_i, self.energy_distribution_b, self.de)
-		self.energy_distribution = conv(self.sb, self.energy_distribution_s_o, self.de)
+		self.energy_distribution = self.rs + conv(self.sb, self.energy_distribution_s_o, self.de)
 		
 	def convolveGauss(self, x_exp, y_exp):
 		extra = np.linspace(-10,-self.de, round(10/self.de))
