@@ -1,9 +1,0 @@
-numpy
-pandas
-matplotlib
-scipy
-nlopt
-ipython
-setuptools
-tqdm
-ipywidgets
